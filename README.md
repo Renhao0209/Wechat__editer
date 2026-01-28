@@ -126,6 +126,7 @@ npm run preview
 | `src/wechat/wechatEditor.css` | 编辑器 UI（顶栏/工具栏/预览/弹窗等） |
 | `src/wechat/themes/` | 主题分区（内置主题注册表 / 类型） |
 | `src/wechat/library/` | 组件/模板/套版分区 |
+| `src/wechat/library/components/` | 组件分区（一个组件一个文件） |
 | `.github/` | Issue/PR 模板、labels 同步配置与工作流 |
 
 ## 参与贡献

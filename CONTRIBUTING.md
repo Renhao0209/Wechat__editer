@@ -82,13 +82,22 @@ npm run build
 
 ## 新增组件（组件化素材库）
 
-文件：`src/wechat/library/components.ts`
+组件采用“一组件一文件”的分区，便于 review 与按组件独立提交。
 
-1. 新增 `ComponentItem`：
+文件：
+
+- 组件文件：`src/wechat/library/components/<componentId>.ts`
+- 注册聚合：`src/wechat/library/components/index.ts`
+- 旧入口（保留，供 UI 使用）：`src/wechat/library/components.ts`
+
+步骤：
+
+1. 新增组件文件（例如 `calloutWarn.ts`），导出一个组件定义：
    - `id`：唯一（建议 `camelCase` 或 `kebab-case`）
    - `name/desc/category`：用于面板展示
    - `html`：大多数组件使用 HTML 字符串即可
    - `content`：如果组件包含自定义节点（例如滚动容器 `scrollBox`），请使用结构化内容插入
+2. 在 `src/wechat/library/components/index.ts` 里把新组件加入 `BUILT_IN_COMPONENTS_LIST`
 2. 兼容性建议：
    - 优先使用编辑器已支持的结构：标题/段落/列表/blockquote/hr/img/link
    - 需要自定义容器（`div` 等）时，请先做 Tiptap Node 扩展（参考 `src/wechat/extensions/scrollBox.ts`）
