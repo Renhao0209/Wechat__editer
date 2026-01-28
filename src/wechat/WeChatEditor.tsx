@@ -275,6 +275,55 @@ export default function WeChatEditor() {
   const [selectedComponent, setSelectedComponent] = useState<SelectedComponentInstance | null>(null)
   const [componentPropsValues, setComponentPropsValues] = useState<Record<string, string>>({})
 
+  const probeSelectedComponent = (next: NonNullable<typeof editor>): SelectedComponentInstance | null => {
+    try {
+      const state = next.state
+      const $from = state.selection.$from
+
+      const inferComponentIdFromNode = (nodeTypeName: string, attrs: Record<string, unknown>): string => {
+        const cls = typeof attrs.class === 'string' ? (attrs.class as string) : ''
+        if (nodeTypeName === 'blockquote') {
+          if (cls.includes('card')) return 'card'
+          if (cls.includes('callout')) return 'calloutInfo'
+        }
+        if (nodeTypeName === 'heading') {
+          const level = typeof attrs.level === 'number' ? (attrs.level as number) : undefined
+          if (level === 2 && cls.includes('titlebar')) return 'titlebarH2'
+        }
+        return ''
+      }
+
+      for (let depth = $from.depth; depth >= 0; depth--) {
+        const node = $from.node(depth)
+        const attrs = (node?.attrs ?? {}) as Record<string, unknown>
+        const nodeTypeName = node?.type?.name ?? ''
+
+        let componentId = typeof attrs.wceComponent === 'string' ? (attrs.wceComponent as string) : ''
+        if (!componentId) componentId = inferComponentIdFromNode(nodeTypeName, attrs)
+        if (!componentId) continue
+
+        const target = COMPONENTS.find((c) => c.id === componentId)
+        if (!target?.config || !target.render) continue
+
+        const defaults = getDefaultComponentConfigValues(target.config)
+        const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
+        const decoded = rawProps ? decodeComponentProps(rawProps) : null
+        const saved = readSavedComponentConfigValues(componentId) ?? {}
+        const values = { ...defaults, ...saved, ...(decoded ?? {}) }
+
+        if (depth <= 0) continue
+        const from = $from.before(depth)
+        const to = from + node.nodeSize
+
+        return { componentId, from, to, values }
+      }
+
+      return null
+    } catch {
+      return null
+    }
+  }
+
   const COMPONENT_CATEGORY_ORDER: ComponentUiCategory[] = useMemo(
     () => ['标题', '卡片', '引用', '分割线', '清单', '图片'],
     [],
@@ -382,36 +431,8 @@ export default function WeChatEditor() {
       setCurrentHtml(html)
     },
     onSelectionUpdate: ({ editor: next }) => {
-      try {
-        const state = next.state
-        const $from = state.selection.$from
-
-        for (let depth = $from.depth; depth >= 0; depth--) {
-          const node = $from.node(depth)
-          const attrs = (node?.attrs ?? {}) as Record<string, unknown>
-          const componentId = typeof attrs.wceComponent === 'string' ? (attrs.wceComponent as string) : ''
-          if (!componentId) continue
-
-          const target = COMPONENTS.find((c) => c.id === componentId)
-          if (!target?.config || !target.render) continue
-
-          const defaults = getDefaultComponentConfigValues(target.config)
-          const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
-          const decoded = rawProps ? decodeComponentProps(rawProps) : null
-          const saved = readSavedComponentConfigValues(componentId) ?? {}
-          const values = { ...defaults, ...saved, ...(decoded ?? {}) }
-
-          const from = $from.before(depth)
-          const to = from + node.nodeSize
-
-          setSelectedComponent({ componentId, from, to, values })
-          return
-        }
-
-        setSelectedComponent(null)
-      } catch {
-        setSelectedComponent(null)
-      }
+      const found = probeSelectedComponent(next)
+      setSelectedComponent(found)
     },
   })
 
@@ -1826,6 +1847,21 @@ export default function WeChatEditor() {
                 <div className="wechatProps__hint">
                   先在正文里点选一个组件块（例如提示框/卡片/标题条），这里就能调整参数并应用。
                 </div>
+
+                <button
+                  type="button"
+                  className="wechatPrimaryAction"
+                  onClick={() => {
+                    if (!editor) return
+                    const found = probeSelectedComponent(editor)
+                    setSelectedComponent(found)
+                    if (!found) {
+                      flash('未识别到组件：请把光标放到组件块内部（或点一下组件文字）')
+                    }
+                  }}
+                >
+                  从光标读取（刷新）
+                </button>
 
                 {!selectedComponent ? (
                   <div className="wechatLibrary__empty">未选中可编辑组件</div>
