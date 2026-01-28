@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'badgeH3',
@@ -16,7 +23,10 @@ const component = {
     const cls = toneClass(values)
     const text = escapeHtml((values.text || '要点小标题').trim()) || '要点小标题'
     const className = ['badge', cls].filter(Boolean).join(' ')
-    return { html: `<h3 class="${className}">${text}</h3><p></p>` }
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+    return {
+      html: `<h3 class="${className}" data-wce-component="badgeH3" data-wce-props="${propsRaw}">${text}</h3><p></p>`,
+    }
   },
 } satisfies BuiltInComponentDef
 

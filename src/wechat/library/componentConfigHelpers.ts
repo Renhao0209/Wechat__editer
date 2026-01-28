@@ -16,6 +16,7 @@ export const toneField = (defaultValue: ComponentToneId = 'theme'): ComponentCon
   key: 'tone',
   label: '色系',
   type: 'select',
+  role: 'style',
   default: defaultValue,
   options: TONE_OPTIONS,
 })

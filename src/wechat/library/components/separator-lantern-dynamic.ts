@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   // 建议文件名: separator-lantern-dynamic.ts
@@ -22,10 +29,14 @@ const component = {
   render: (values: Record<string, string>) => {
     const cls = toneClass(values)
     const emoji = escapeHtml((values.emoji || '🧧 🧧 🧧').trim()) || '🧧 🧧 🧧'
+    const wrapperClassName = ['wce-wrap', cls].filter(Boolean).join(' ')
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
     return {
       html: `
+<blockquote class="${wrapperClassName}" data-wce-component="separator-lantern-dynamic" data-wce-props="${propsRaw}">
 <hr class="${cls}" />
 <p class="divider divider--lantern ${cls}">${emoji}</p>
+</blockquote>
 <p></p>
 `.trim(),
     }

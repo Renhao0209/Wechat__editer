@@ -1,5 +1,5 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, toneClass, toneField } from '../componentConfigHelpers'
+import { buildConfig, encodeComponentProps, escapeHtmlAttr, toneClass, toneField } from '../componentConfigHelpers'
 
 const component = {
   id: 'dividerLine',
@@ -10,7 +10,8 @@ const component = {
 
   render: (values: Record<string, string>) => {
     const cls = toneClass(values)
-    return { html: `<hr class="${cls}" /><p></p>` }
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+    return { html: `<hr class="${cls}" data-wce-component="dividerLine" data-wce-props="${propsRaw}" /><p></p>` }
   },
 } satisfies BuiltInComponentDef
 

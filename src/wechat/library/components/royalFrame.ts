@@ -1,5 +1,13 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, escapeHtmlWithBreaks, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  escapeHtmlWithBreaks,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'royalFrame',
@@ -31,9 +39,10 @@ const component = {
 
     const frameVariant = style === 'tone' ? ['frame--tone', clsTone].filter(Boolean).join(' ') : 'frame--royal'
     const className = ['frame', frameVariant].filter(Boolean).join(' ')
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
 
     return {
-      html: `<blockquote class="${className}"><p class="frame__kicker"><strong>${title}</strong></p><p>${body}</p><p class="caption">（内容较长时建议用“内嵌滚动区”组件）</p></blockquote><p></p>`,
+      html: `<blockquote class="${className}" data-wce-component="royalFrame" data-wce-props="${propsRaw}"><p class="frame__kicker"><strong>${title}</strong></p><p>${body}</p><p class="caption">（内容较长时建议用“内嵌滚动区”组件）</p></blockquote><p></p>`,
     }
   },
 } satisfies BuiltInComponentDef

@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'imageCaption',
@@ -28,8 +35,10 @@ const component = {
     const url = escapeHtml((values.url || '').trim()) || 'https://placehold.co/900x520/png'
     const caption = escapeHtml((values.caption || '').trim()) || '图注：一句话说明图片信息'
     const captionClassName = ['caption', cls].filter(Boolean).join(' ')
+    const wrapperClassName = ['wce-wrap', cls].filter(Boolean).join(' ')
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
     return {
-      html: `<p><img src="${url}" alt="示例图片" /></p><p class="${captionClassName}">${caption}</p><p></p>`,
+      html: `<blockquote class="${wrapperClassName}" data-wce-component="imageCaption" data-wce-props="${propsRaw}"><p><img src="${url}" alt="示例图片" /></p><p class="${captionClassName}">${caption}</p></blockquote><p></p>`,
     }
   },
 } satisfies BuiltInComponentDef

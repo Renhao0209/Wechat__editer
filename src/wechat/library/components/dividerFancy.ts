@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'dividerFancy',
@@ -15,7 +22,10 @@ const component = {
     const cls = toneClass(values)
     const text = escapeHtml((values.text || '✦ ✦ ✦').trim()) || '✦ ✦ ✦'
     const className = ['divider', 'divider--flower', cls].filter(Boolean).join(' ')
-    return { html: `<p class="${className}">${text}</p><p></p>` }
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+    return {
+      html: `<p class="${className}" data-wce-component="dividerFancy" data-wce-props="${propsRaw}">${text}</p><p></p>`,
+    }
   },
 } satisfies BuiltInComponentDef
 

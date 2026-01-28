@@ -22,10 +22,18 @@
 
 - 主题 token 体系 v1（起步）：在导出 CSS 中新增 `--wce-*` token 别名，后续组件可逐步从 `--wechat-*` 迁移到 `--wce-*`。
 - 组件属性面板 MVP：素材库新增「属性」页签，点选正文中的组件块即可在侧栏调整参数并应用。
-- 已支持可编辑的组件实例（首批 3 个）：
-  - `calloutInfo`（提示框）
-  - `card`（内容卡片）
-  - `titlebarH2`（标题条 H2）
+- 组件可编辑实例（升级为可持续扩展的形态）：
+  - 组件实例统一写入 `data-wce-component` + `data-wce-props`，支持再次选中继续编辑。
+  - 组件元数据标准（Component Spec）已在类型与编辑器逻辑中兼容：`propSchema/defaultProps/schemaVersion/tags` 等（保留旧 `config/render` 以向后兼容）。
+  - 属性面板增强：支持「重置为默认」「复制样式到同类组件」（只复制样式字段，避免覆盖标题/正文等内容字段）。
+  - Markdown 源码模式：支持基于光标定位组件块并编辑参数；容器类组件应用属性时尽量保留内部正文内容。
+
+已覆盖的可编辑组件（示例，后续可继续扩充）：
+- `calloutInfo`（提示框）
+- `card`（内容卡片）
+- `titlebarH2`（标题条 H2）
+- `royalFrameScroll`（紫金边框 + 内嵌滚动区，保留正文策略）
+- `badgeH3` / `checklist` / `steps` / `dividerLine` / `dividerFancy` / `quoteFocus` / `guide` / `imageCaption` 等（组件实例携带可编辑 props）
 
 ---
 
@@ -97,7 +105,7 @@
 - DividerFancy / 花式分割线（装饰能力）
 
 验收标准：
-- 至少 3 个组件支持属性面板实时修改，且导出后保留同样外观。
+- 至少 3 个组件支持属性面板修改并应用（可后续演进为“边改边生效”），且导出后保留同样外观。
 
 ---
 

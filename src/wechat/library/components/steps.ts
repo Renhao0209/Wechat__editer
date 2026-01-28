@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 function linesToListItems(text: string, fallback: string[]): string[] {
   const lines = text
@@ -29,7 +36,8 @@ const component = {
     const items = linesToListItems(values.items || '', ['第一步：写要点', '第二步：补充解释', '第三步：给出结论']).map((s) =>
       `<li>${escapeHtml(s)}</li>`,
     )
-    return { html: `<ol class="${cls}">${items.join('')}</ol><p></p>` }
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+    return { html: `<ol class="${cls}" data-wce-component="steps" data-wce-props="${propsRaw}">${items.join('')}</ol><p></p>` }
   },
 } satisfies BuiltInComponentDef
 

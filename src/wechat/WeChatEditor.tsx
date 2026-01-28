@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { NodeSelection } from '@tiptap/pm/state'
+import type { Node as PMNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import TextAlign from '@tiptap/extension-text-align'
 import Link from '@tiptap/extension-link'
-import Image from '@tiptap/extension-image'
+import { ImageWithClass } from './extensions/imageWithClass'
 import { TextStyle } from '@tiptap/extension-text-style'
 import Color from '@tiptap/extension-color'
 import Highlight from '@tiptap/extension-highlight'
@@ -23,7 +24,7 @@ import type { ComponentCategory, ComponentConfigSchema, ComponentItem } from './
 import { LAYOUT_PRESETS } from './library/layoutPresets'
 import { TEMPLATES } from './library/templates'
 import { buildInlinedWeChatArticleHtml } from './inlineWeChat'
-import { decodeComponentProps } from './library/componentConfigHelpers'
+import { decodeComponentProps, encodeComponentProps, escapeHtml, escapeHtmlAttr, toneClass } from './library/componentConfigHelpers'
 import { BlockquoteWithClass } from './extensions/blockquoteWithClass'
 import { ParagraphWithClass } from './extensions/paragraphWithClass'
 import { HeadingWithClass } from './extensions/headingWithClass'
@@ -41,10 +42,43 @@ const STORAGE_CUSTOM_THEMES_KEY = 'wechatedit:customThemes'
 const STORAGE_VIEW_KEY = 'wechatedit:view'
 const STORAGE_COMPONENT_CONFIGS_KEY = 'wechatedit:componentConfigs'
 const STORAGE_EDITOR_FORMAT_KEY = 'wechatedit:editorFormat'
+const STORAGE_RECENT_COLORS_KEY = 'wechatedit:recentTextColors'
+const STORAGE_DRAFTS_KEY = 'wechatedit:drafts'
+const STORAGE_ACTIVE_DRAFT_KEY = 'wechatedit:activeDraftId'
+const STORAGE_FILES_PANEL_HEIGHT_KEY = 'wechatedit:filesPanelHeight'
+const STORAGE_FS_ROOT_KEY = 'wechatedit:fsRoot'
+const STORAGE_ACTIVE_FILE_KEY = 'wechatedit:activeFile'
 
 type ViewMode = 'split' | 'edit' | 'preview'
 
 type EditorFormat = 'rich' | 'markdown'
+
+type DraftItem = {
+  id: string
+  name: string
+  updatedAt: number
+  editorFormat: EditorFormat
+  html: string
+  markdown?: string
+}
+
+type FsEntry = {
+  name: string
+  relPath: string
+  isDir: boolean
+  kind: 'dir' | 'md' | 'html' | 'txt' | 'other'
+}
+
+type ActiveFile = {
+  root: string
+  rel: string
+}
+
+type FsSearchResult = {
+  rel: string
+  name: string
+  kind: 'md' | 'html' | 'txt'
+}
 
 type ComponentUiCategory = Exclude<ComponentCategory, '分隔'>
 
@@ -56,6 +90,8 @@ type SelectedComponentInstance = {
   sourceEnd?: number
   values: Record<string, string>
 }
+
+const COMPONENTS_PRESERVE_BODY = new Set<string>(['royalFrameScroll'])
 
 const DEFAULT_CONTENT = `
 <h1>标题示例</h1>
@@ -283,6 +319,9 @@ export default function WeChatEditor() {
   const previewScrollRef = useRef<HTMLDivElement | null>(null)
   const isSyncingScrollRef = useRef(false)
 
+  const librarySplitRef = useRef<HTMLDivElement | null>(null)
+  const filesResizeActiveRef = useRef(false)
+
   const [isComponentConfigOpen, setIsComponentConfigOpen] = useState(false)
   const [componentConfigTargetId, setComponentConfigTargetId] = useState<string | null>(null)
   const [componentConfigValues, setComponentConfigValues] = useState<Record<string, string>>({})
@@ -294,10 +333,299 @@ export default function WeChatEditor() {
 
   const [currentHtml, setCurrentHtml] = useState<string>(initialHtml)
 
+  const [drafts, setDrafts] = useState<DraftItem[]>(() => {
+    const raw = safeReadJson<unknown>(STORAGE_DRAFTS_KEY, [])
+    if (!Array.isArray(raw)) return []
+    const out: DraftItem[] = []
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue
+      const anyItem = item as Record<string, unknown>
+      const id = typeof anyItem.id === 'string' ? anyItem.id : ''
+      const name = typeof anyItem.name === 'string' ? anyItem.name : ''
+      const updatedAt = typeof anyItem.updatedAt === 'number' ? anyItem.updatedAt : 0
+      const editorFormat = anyItem.editorFormat === 'markdown' || anyItem.editorFormat === 'rich' ? (anyItem.editorFormat as EditorFormat) : 'rich'
+      const html = typeof anyItem.html === 'string' ? anyItem.html : ''
+      const markdown = typeof anyItem.markdown === 'string' ? anyItem.markdown : undefined
+      if (!id || !name || !html) continue
+      out.push({ id, name, updatedAt, editorFormat, html, markdown })
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 200)
+  })
+
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(() => {
+    const saved = safeReadLocalStorage(STORAGE_ACTIVE_DRAFT_KEY)
+    return saved && saved.trim().length > 0 ? saved : null
+  })
+
+  const [filesPanelHeight, setFilesPanelHeight] = useState<number>(() => {
+    const raw = safeReadLocalStorage(STORAGE_FILES_PANEL_HEIGHT_KEY)
+    const n = raw ? Number(raw) : NaN
+    return Number.isFinite(n) && n > 80 ? n : 220
+  })
+
+  const [filesTab, setFilesTab] = useState<'drafts' | 'files'>('drafts')
+
+  const [fsRoot, setFsRoot] = useState<string>(() => {
+    const saved = safeReadLocalStorage(STORAGE_FS_ROOT_KEY)
+    return typeof saved === 'string' ? saved : ''
+  })
+
+  const [activeFile, setActiveFile] = useState<ActiveFile | null>(() => {
+    const raw = safeReadLocalStorage(STORAGE_ACTIVE_FILE_KEY)
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      if (!parsed || typeof parsed !== 'object') return null
+      const o = parsed as Record<string, unknown>
+      const root = typeof o.root === 'string' ? o.root : ''
+      const rel = typeof o.rel === 'string' ? o.rel : ''
+      if (!root || !rel) return null
+      return { root, rel }
+    } catch {
+      return null
+    }
+  })
+
+  const [fsSelectedRel, setFsSelectedRel] = useState<string>('')
+
+  const [fsExpanded, setFsExpanded] = useState<Set<string>>(() => new Set<string>(['']))
+  const [fsDirCache, setFsDirCache] = useState<Record<string, FsEntry[]>>({})
+  const [fsLoading, setFsLoading] = useState(false)
+
+  const [fsQuery, setFsQuery] = useState('')
+  const [fsKindFilter, setFsKindFilter] = useState<'all' | 'md' | 'html' | 'txt'>('all')
+  const [fsSearchResults, setFsSearchResults] = useState<FsSearchResult[]>([])
+  const [fsSearchRunning, setFsSearchRunning] = useState(false)
+  const fsSearchTokenRef = useRef(0)
+
+  const [fsContextMenu, setFsContextMenu] = useState<
+    | null
+    | {
+        x: number
+        y: number
+        rel: string
+        isDir: boolean
+      }
+  >(null)
+
+  const [fsInlineAction, setFsInlineAction] = useState<
+    | null
+    | {
+        type: 'rename' | 'newFile' | 'newFolder'
+        targetRel: string // rename: item rel; new*: parent dir rel
+        initialName?: string
+      }
+  >(null)
+
+  const fsInlineInputRef = useRef<HTMLInputElement | null>(null)
+
+  const [activeFileSavedSig, setActiveFileSavedSig] = useState<string>('')
+  const [isActiveFileDirty, setIsActiveFileDirty] = useState(false)
+
   const [libraryTab, setLibraryTab] = useState<'components' | 'layouts' | 'props'>('components')
 
   const [selectedComponent, setSelectedComponent] = useState<SelectedComponentInstance | null>(null)
   const [componentPropsValues, setComponentPropsValues] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    safeWriteJson(STORAGE_DRAFTS_KEY, drafts)
+  }, [drafts])
+
+  useEffect(() => {
+    if (activeDraftId) safeWriteLocalStorage(STORAGE_ACTIVE_DRAFT_KEY, activeDraftId)
+    else safeWriteLocalStorage(STORAGE_ACTIVE_DRAFT_KEY, '')
+  }, [activeDraftId])
+
+  useEffect(() => {
+    safeWriteLocalStorage(STORAGE_FILES_PANEL_HEIGHT_KEY, String(Math.round(filesPanelHeight)))
+  }, [filesPanelHeight])
+
+  useEffect(() => {
+    safeWriteLocalStorage(STORAGE_FS_ROOT_KEY, fsRoot)
+  }, [fsRoot])
+
+  useEffect(() => {
+    if (activeFile) safeWriteLocalStorage(STORAGE_ACTIVE_FILE_KEY, JSON.stringify(activeFile))
+    else safeWriteLocalStorage(STORAGE_ACTIVE_FILE_KEY, '')
+  }, [activeFile])
+
+  const DEFAULT_TEXT_COLOR = '#111111'
+  const [textColorHex, setTextColorHex] = useState<string>(DEFAULT_TEXT_COLOR)
+  const [textColorInput, setTextColorInput] = useState<string>(DEFAULT_TEXT_COLOR)
+
+  type ImageStyleId = '' | 'wce-img--rounded' | 'wce-img--shadow' | 'wce-img--border' | 'wce-img--circle'
+  const IMAGE_STYLE_OPTIONS: Array<{ id: ImageStyleId; label: string }> = [
+    { id: '', label: '默认' },
+    { id: 'wce-img--rounded', label: '圆角' },
+    { id: 'wce-img--shadow', label: '阴影' },
+    { id: 'wce-img--border', label: '描边' },
+    { id: 'wce-img--circle', label: '圆形' },
+  ]
+
+  const [imageStyle, setImageStyle] = useState<ImageStyleId>('')
+
+  const PRESET_TEXT_COLORS = useMemo(
+    () => ['#111111', '#7c3aed', '#0b57d0', '#0f766e', '#16a34a', '#d11a2a', '#f59e0b', '#b7791f', '#6b7280'],
+    [],
+  )
+
+  const [recentTextColors, setRecentTextColors] = useState<string[]>(() => {
+    const raw = safeReadLocalStorage(STORAGE_RECENT_COLORS_KEY)
+    if (!raw) return []
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      if (!Array.isArray(parsed)) return []
+      return parsed.filter((x) => typeof x === 'string').slice(0, 8)
+    } catch {
+      return []
+    }
+  })
+
+  const normalizeColorToHex = (input: string): string | null => {
+    const raw = (input || '').trim().toLowerCase()
+    if (!raw) return null
+
+    const hex3 = /^#([0-9a-f]{3})$/i.exec(raw)
+    if (hex3) {
+      const s = hex3[1]
+      return `#${s[0]}${s[0]}${s[1]}${s[1]}${s[2]}${s[2]}`
+    }
+
+    const hex6 = /^#([0-9a-f]{6})$/i.exec(raw)
+    if (hex6) return `#${hex6[1]}`
+
+    const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([01](?:\.\d+)?))?\s*\)$/i.exec(raw)
+    if (rgb) {
+      const r = Math.max(0, Math.min(255, Number(rgb[1])))
+      const g = Math.max(0, Math.min(255, Number(rgb[2])))
+      const b = Math.max(0, Math.min(255, Number(rgb[3])))
+      const to2 = (n: number) => n.toString(16).padStart(2, '0')
+      return `#${to2(r)}${to2(g)}${to2(b)}`
+    }
+
+    return null
+  }
+
+  const pushRecentTextColor = (hex: string): void => {
+    setRecentTextColors((prev) => {
+      const next = [hex, ...prev.filter((c) => c !== hex)].slice(0, 8)
+      safeWriteLocalStorage(STORAGE_RECENT_COLORS_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const applyTextColor = (color: string): void => {
+    if (!ensureEditor()) return
+    const hex = normalizeColorToHex(color)
+    if (!hex) {
+      flash('颜色格式不正确：请输入 #RRGGBB 或使用取色器')
+      return
+    }
+    editor.chain().focus().setColor(hex).run()
+    pushRecentTextColor(hex)
+  }
+
+  const renderTextColorPalette = (onPick: (hex: string) => void) => {
+    const merged = [...recentTextColors, ...PRESET_TEXT_COLORS]
+      .filter((c, i, arr) => typeof c === 'string' && arr.indexOf(c) === i)
+      .slice(0, 12)
+
+    if (merged.length === 0) return null
+
+    return (
+      <div className="tbPalette" aria-label="常用颜色">
+        {merged.map((c) => (
+          <button
+            key={c}
+            type="button"
+            className="tbSwatch"
+            title={c}
+            aria-label={`颜色 ${c}`}
+            style={{ background: c }}
+            onClick={() => {
+              setTextColorHex(c)
+              setTextColorInput(c)
+              onPick(c)
+            }}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  const stripColorSpans = (fragment: string): string => {
+    // Remove only spans that explicitly set text color.
+    let out = fragment
+    // <span style="...color: ...;..."> or single-quoted.
+    out = out.replace(/<span\b([^>]*?)\bstyle=("|')([^"']*?)\2([^>]*?)>/gi, (m, _pre, _q, style) => {
+      const hasColor = /(^|;|\s)color\s*:/i.test(style)
+      return hasColor ? '' : m
+    })
+    out = out.replace(/<\/span\s*>/gi, '')
+    return out
+  }
+
+  const applyMarkdownTextColor = (color: string): void => {
+    const el = markdownScrollRef.current
+    if (!el) return
+
+    const hex = normalizeColorToHex(color)
+    if (!hex) {
+      flash('颜色格式不正确：请输入 #RRGGBB 或使用取色器')
+      return
+    }
+
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? 0
+    if (end <= start) {
+      flash('Markdown 模式：请先选中文本再设置颜色')
+      return
+    }
+
+    const selected = markdownText.slice(start, end)
+    const safeSelected = stripColorSpans(selected)
+    const wrapped = `<span style="color: ${hex}">${safeSelected}</span>`
+    const nextText = `${markdownText.slice(0, start)}${wrapped}${markdownText.slice(end)}`
+    handleMarkdownChange(nextText)
+
+    pushRecentTextColor(hex)
+
+    // Best-effort keep selection on the inner text.
+    window.requestAnimationFrame(() => {
+      try {
+        const openLen = `<span style="color: ${hex}">`.length
+        el.focus()
+        el.setSelectionRange(start + openLen, start + openLen + safeSelected.length)
+      } catch {
+        // ignore
+      }
+    })
+  }
+
+  const clearMarkdownTextColor = (): void => {
+    const el = markdownScrollRef.current
+    if (!el) return
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? 0
+    if (end <= start) {
+      flash('Markdown 模式：请先选中文本再清除颜色')
+      return
+    }
+
+    const selected = markdownText.slice(start, end)
+    const cleared = stripColorSpans(selected)
+    const nextText = `${markdownText.slice(0, start)}${cleared}${markdownText.slice(end)}`
+    handleMarkdownChange(nextText)
+
+    window.requestAnimationFrame(() => {
+      try {
+        el.focus()
+        el.setSelectionRange(start, start + cleared.length)
+      } catch {
+        // ignore
+      }
+    })
+  }
 
   const probeSelectedComponent = (next: NonNullable<typeof editor>): SelectedComponentInstance | null => {
     try {
@@ -327,9 +655,12 @@ export default function WeChatEditor() {
         if (!componentId) continue
 
         const target = COMPONENTS.find((c) => c.id === componentId)
-        if (!target?.config || !target.render) continue
+        if (!target) continue
+        const schema = getComponentSchema(target)
+        const renderer = getComponentRenderer(target)
+        if (!schema || !renderer) continue
 
-        const defaults = getDefaultComponentConfigValues(target.config)
+        const defaults = getDefaultComponentValues(target, schema)
         const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
         const decoded = rawProps ? decodeComponentProps(rawProps) : null
         const saved = readSavedComponentConfigValues(componentId) ?? {}
@@ -351,21 +682,22 @@ export default function WeChatEditor() {
   const probeMarkdownComponentAtIndex = (text: string, index: number): SelectedComponentInstance | null => {
     const clampIndex = Math.max(0, Math.min(index, text.length))
 
-    const lastBlockquote = text.lastIndexOf('<blockquote', clampIndex)
-    const lastH2 = text.lastIndexOf('<h2', clampIndex)
-    const start = Math.max(lastBlockquote, lastH2)
+    const lastDataAttr = text.lastIndexOf('data-wce-component', clampIndex)
+    const lastFallbackBlockquote = text.lastIndexOf('<blockquote', clampIndex)
+    const lastFallbackH2 = text.lastIndexOf('<h2', clampIndex)
+    const startFromAttr = lastDataAttr >= 0 ? text.lastIndexOf('<', lastDataAttr) : -1
+    const start = Math.max(startFromAttr, lastFallbackBlockquote, lastFallbackH2)
     if (start < 0) return null
 
-    const isBlockquote = start === lastBlockquote
     const tagClose = text.indexOf('>', start)
     if (tagClose < 0) return null
     const openTag = text.slice(start, tagClose + 1)
 
-    const closeTag = isBlockquote ? '</blockquote>' : '</h2>'
-    const closeIndex = text.indexOf(closeTag, tagClose + 1)
-    if (closeIndex < 0) return null
-    const end = closeIndex + closeTag.length
-    if (clampIndex < start || clampIndex > end) return null
+    const tagMatch = /^<\s*([a-z0-9-]+)/i.exec(openTag)
+    const tagName = (tagMatch?.[1] ?? '').toLowerCase()
+    if (!tagName) return null
+
+    const isSelfClosing = /\/\s*>\s*$/.test(openTag) || tagName === 'hr'
 
     const getAttr = (name: string): string => {
       const re = new RegExp(`${name}="([^"]*)"`, 'i')
@@ -373,15 +705,52 @@ export default function WeChatEditor() {
       return m?.[1] ?? ''
     }
 
+    let end = tagClose + 1
+    if (!isSelfClosing) {
+      const openNeedle = `<${tagName}`
+      const closeNeedle = `</${tagName}>`
+      let scan = tagClose + 1
+      let depth = 1
+
+      const isNameBoundary = (pos: number): boolean => {
+        const c = text[pos + openNeedle.length]
+        return c == null || /[\s>/]/.test(c)
+      }
+
+      while (scan < text.length) {
+        const nextOpenRaw = text.indexOf(openNeedle, scan)
+        const nextOpen = nextOpenRaw >= 0 && isNameBoundary(nextOpenRaw) ? nextOpenRaw : -1
+        const nextClose = text.indexOf(closeNeedle, scan)
+
+        if (nextClose < 0) return null
+
+        if (nextOpen >= 0 && nextOpen < nextClose) {
+          depth += 1
+          scan = nextOpen + openNeedle.length
+          continue
+        }
+
+        depth -= 1
+        scan = nextClose + closeNeedle.length
+        if (depth <= 0) {
+          end = scan
+          break
+        }
+      }
+    }
+
+    if (clampIndex < start || clampIndex > end) return null
+
     let componentId = getAttr('data-wce-component')
     const rawProps = getAttr('data-wce-props')
     const classAttr = getAttr('class')
 
     if (!componentId) {
+      const isBlockquote = tagName === 'blockquote'
       if (isBlockquote) {
         if (classAttr.includes('card')) componentId = 'card'
         else if (classAttr.includes('callout')) componentId = 'calloutInfo'
-      } else {
+      } else if (tagName === 'h2') {
         if (classAttr.includes('titlebar')) componentId = 'titlebarH2'
       }
     }
@@ -389,9 +758,12 @@ export default function WeChatEditor() {
     if (!componentId) return null
 
     const target = COMPONENTS.find((c) => c.id === componentId)
-    if (!target?.config || !target.render) return null
+    if (!target) return null
+    const schema = getComponentSchema(target)
+    const renderer = getComponentRenderer(target)
+    if (!schema || !renderer) return null
 
-    const defaults = getDefaultComponentConfigValues(target.config)
+    const defaults = getDefaultComponentValues(target, schema)
     const decoded = rawProps ? decodeComponentProps(rawProps) : null
     const saved = readSavedComponentConfigValues(componentId) ?? {}
     const values = { ...defaults, ...saved, ...(decoded ?? {}) }
@@ -427,12 +799,30 @@ export default function WeChatEditor() {
     return COMPONENTS.find((x) => x.id === componentConfigTargetId)
   }, [componentConfigTargetId])
 
+  const getComponentSchema = (c: ComponentItem): ComponentConfigSchema | null => {
+    return (c.propSchema ?? c.config ?? null) as ComponentConfigSchema | null
+  }
+
+  const getComponentRenderer = (c: ComponentItem) => {
+    return (c.renderer ?? c.render ?? null) as ComponentItem['render'] | null
+  }
+
   const getDefaultComponentConfigValues = (schema: ComponentConfigSchema): Record<string, string> => {
     const out: Record<string, string> = {}
     for (const f of schema.fields) {
       out[f.key] = f.default ?? ''
     }
     return out
+  }
+
+  const getDefaultComponentValues = (c: ComponentItem, schema: ComponentConfigSchema): Record<string, string> => {
+    return { ...getDefaultComponentConfigValues(schema), ...(c.defaultProps ?? {}) }
+  }
+
+  const getStyleKeys = (schema: ComponentConfigSchema): string[] => {
+    return schema.fields
+      .filter((f) => f.role === 'style' || (f.role == null && (f.type === 'select' || f.type === 'color')))
+      .map((f) => f.key)
   }
 
   const readSavedComponentConfigValues = (componentId: string): Record<string, string> | null => {
@@ -451,9 +841,12 @@ export default function WeChatEditor() {
     return COMPONENTS.filter((c) => {
       if (componentCategory !== 'all' && toUiCategory(c.category) !== componentCategory) return false
       if (!q) return true
+      const desc = c.desc ?? c.description ?? ''
+      const tags = (c.tags ?? []).join(' ')
       return (
         c.name.toLowerCase().includes(q) ||
-        (c.desc ? c.desc.toLowerCase().includes(q) : false) ||
+        (desc ? desc.toLowerCase().includes(q) : false) ||
+        (tags ? tags.toLowerCase().includes(q) : false) ||
         c.id.toLowerCase().includes(q)
       )
     })
@@ -487,7 +880,7 @@ export default function WeChatEditor() {
         linkOnPaste: true,
         HTMLAttributes: { rel: 'noopener noreferrer nofollow' },
       }),
-      Image.configure({
+      ImageWithClass.configure({
         inline: false,
         allowBase64: true,
         HTMLAttributes: { style: 'max-width: 100%; height: auto;' },
@@ -522,7 +915,10 @@ export default function WeChatEditor() {
 
           if (!componentId) continue
           const target = COMPONENTS.find((c) => c.id === componentId)
-          if (!target?.config || !target.render) continue
+          if (!target) continue
+          const schema = getComponentSchema(target)
+          const renderer = getComponentRenderer(target)
+          if (!schema || !renderer) continue
 
           componentDepth = depth
           break
@@ -545,6 +941,20 @@ export default function WeChatEditor() {
     onSelectionUpdate: ({ editor: next }) => {
       const found = probeSelectedComponent(next)
       setSelectedComponent(found)
+
+      // Sync current text color into toolbar (best-effort).
+      const c = (next.getAttributes('textStyle')?.color as string | undefined) ?? ''
+      const hex = normalizeColorToHex(c)
+      if (hex) {
+        setTextColorHex(hex)
+        setTextColorInput(hex)
+      }
+
+      // Sync current image style into toolbar (best-effort).
+      const imgCls = (next.getAttributes('image')?.class as string | undefined) ?? ''
+      const normalized = imgCls.trim()
+      const allowed = new Set(IMAGE_STYLE_OPTIONS.map((x) => x.id))
+      setImageStyle((allowed.has(normalized as ImageStyleId) ? (normalized as ImageStyleId) : '') as ImageStyleId)
     },
   })
 
@@ -778,6 +1188,647 @@ export default function WeChatEditor() {
     }, 220)
   }
 
+  const getDraftDisplayTime = (ts: number): string => {
+    if (!ts) return ''
+    try {
+      return new Date(ts).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    } catch {
+      return ''
+    }
+  }
+
+  const hasDesktopFs = Boolean(window.desktop?.fs)
+
+  const fsListDir = async (rel: string): Promise<FsEntry[]> => {
+    if (!window.desktop?.fs) return []
+    if (!fsRoot) return []
+    const res = await window.desktop.fs.listDir({ root: fsRoot, rel })
+    if (!res.ok || !res.entries) {
+      flash(res.error ? `读取目录失败：${res.error}` : '读取目录失败')
+      return []
+    }
+    return res.entries.filter((e) => e.kind !== 'other')
+  }
+
+  const ensureDirLoaded = async (rel: string): Promise<void> => {
+    if (fsDirCache[rel]) return
+    setFsLoading(true)
+    try {
+      const entries = await fsListDir(rel)
+      setFsDirCache((prev) => ({ ...prev, [rel]: entries }))
+    } finally {
+      setFsLoading(false)
+    }
+  }
+
+  const toggleDir = async (rel: string): Promise<void> => {
+    setFsExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(rel)) next.delete(rel)
+      else next.add(rel)
+      return next
+    })
+    await ensureDirLoaded(rel)
+  }
+
+  const fileExtKind = (rel: string): 'md' | 'html' | 'txt' | 'other' => {
+    const lower = rel.toLowerCase()
+    if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'md'
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html'
+    if (lower.endsWith('.txt')) return 'txt'
+    return 'other'
+  }
+
+  const normalizeRelDir = (rel: string): string => {
+    const r = String(rel || '').replaceAll('\\', '/')
+    if (!r) return ''
+    return r.endsWith('/') ? r.slice(0, -1) : r
+  }
+
+  const relDirOf = (rel: string): string => {
+    const r = String(rel || '').replaceAll('\\', '/')
+    const idx = r.lastIndexOf('/')
+    return idx >= 0 ? r.slice(0, idx) : ''
+  }
+
+  const relBaseName = (rel: string): string => {
+    const r = String(rel || '').replaceAll('\\', '/')
+    const idx = r.lastIndexOf('/')
+    return idx >= 0 ? r.slice(idx + 1) : r
+  }
+
+  const joinRel = (parentRel: string, name: string): string => {
+    const base = normalizeRelDir(parentRel)
+    const n = String(name || '').replaceAll('\\', '/').replace(/^\//, '')
+    if (!base) return n
+    if (!n) return base
+    return `${base}/${n}`
+  }
+
+  const isRelDescendantOrSame = (parentRel: string, childRel: string): boolean => {
+    const p = normalizeRelDir(parentRel)
+    const c = normalizeRelDir(childRel)
+    if (!p) return false
+    if (p === c) return true
+    return c.startsWith(p + '/')
+  }
+
+  const sigOf = (s: string): string => {
+    // Lightweight stable signature; enough for dirty indicator.
+    let h1 = 2166136261
+    for (let i = 0; i < s.length; i++) {
+      h1 ^= s.charCodeAt(i)
+      h1 = Math.imul(h1, 16777619)
+    }
+    return `${s.length}:${(h1 >>> 0).toString(16)}`
+  }
+
+  const closeFsContextMenu = () => setFsContextMenu(null)
+
+  useEffect(() => {
+    if (!fsInlineAction) return
+    const t = window.setTimeout(() => fsInlineInputRef.current?.focus(), 0)
+    return () => window.clearTimeout(t)
+  }, [fsInlineAction])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (filesTab !== 'files') return
+      if (fsInlineAction) return
+
+      if (e.key === 'F2') {
+        const target = (fsSelectedRel || (activeFile && activeFile.root === fsRoot ? activeFile.rel : '') || '').trim()
+        if (!target) return
+        e.preventDefault()
+        setFsInlineAction({ type: 'rename', targetRel: target, initialName: relBaseName(target) })
+      }
+
+      if (e.key === 'Escape') {
+        if (fsContextMenu) {
+          e.preventDefault()
+          closeFsContextMenu()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeFile, filesTab, fsContextMenu, fsInlineAction, fsRoot, fsSelectedRel])
+
+  useEffect(() => {
+    if (!activeFile || !fsRoot || activeFile.root !== fsRoot) {
+      setIsActiveFileDirty(false)
+      return
+    }
+    const content = getSavePayloadForRel(activeFile.rel)
+    const nextSig = sigOf(content)
+    setIsActiveFileDirty(activeFileSavedSig.length > 0 && nextSig !== activeFileSavedSig)
+  }, [activeFile, activeFileSavedSig, currentHtml, editorFormat, fsRoot, markdownText])
+
+  const openDiskFile = async (rel: string): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) return
+    const kind = fileExtKind(rel)
+    if (kind === 'other') {
+      flash('仅支持打开 .md / .html / .txt')
+      return
+    }
+
+    const ok = window.confirm(`打开文件：${rel}\n\n提示：当前未保存内容可能会丢失。`)
+    if (!ok) return
+
+    const res = await window.desktop.fs.readTextFile({ root: fsRoot, rel })
+    if (!res.ok || typeof res.content !== 'string') {
+      flash(res.error ? `打开失败：${res.error}` : '打开失败')
+      return
+    }
+
+    const content = res.content
+    if (kind === 'md' || kind === 'txt') {
+      isMarkdownTypingRef.current = true
+      setEditorFormat('markdown')
+      setMarkdownText(content)
+      const html = markdownToHtml(content)
+      if (editor) {
+        try {
+          editor.commands.setContent(html)
+        } catch {
+          // ignore
+        }
+      }
+      safeWriteLocalStorage(STORAGE_KEY, html)
+      setCurrentHtml(html)
+      window.setTimeout(() => {
+        isMarkdownTypingRef.current = false
+      }, 350)
+    } else {
+      isMarkdownTypingRef.current = false
+      setEditorFormat('rich')
+      if (editor) {
+        try {
+          editor.commands.setContent(content)
+        } catch {
+          // ignore
+        }
+      }
+      safeWriteLocalStorage(STORAGE_KEY, content)
+      setCurrentHtml(content)
+    }
+
+    setActiveFile({ root: fsRoot, rel })
+    setActiveFileSavedSig(sigOf(content))
+    setFilesTab('files')
+    flash('已打开文件')
+  }
+
+  const getSavePayloadForRel = (rel: string): string => {
+    const kind = fileExtKind(rel)
+    if (kind === 'md' || kind === 'txt') {
+      if (editorFormat === 'markdown') return markdownText
+      return htmlToMarkdown(currentHtml)
+    }
+
+    // html
+    if (editorFormat === 'markdown') return markdownToHtml(markdownText)
+    if (editor) return editor.getHTML()
+    return currentHtml
+  }
+
+  const handleFilesPickRoot = async (): Promise<void> => {
+    if (!window.desktop?.fs) {
+      flash('当前环境不支持文件系统（请用桌面版）')
+      return
+    }
+    const res = await window.desktop.fs.pickFolder()
+    if (!res.ok || !res.root) return
+    setFsRoot(res.root)
+    setFsDirCache({})
+    setFsExpanded(new Set(['']))
+    setActiveFile(null)
+    await ensureDirLoaded('')
+    flash('已选择文件夹')
+  }
+
+  const handleFilesRefresh = async (): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) return
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    flash('已刷新')
+  }
+
+  const handleFilesNewFolder = async (): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) {
+      flash('请先选择文件夹')
+      return
+    }
+    const name = window.prompt('新建文件夹（相对根目录路径）', 'articles')?.trim()
+    if (!name) return
+    const rel = name.replaceAll('\\', '/').replace(/^\//, '')
+    const res = await window.desktop.fs.mkdir({ root: fsRoot, rel })
+    if (!res.ok) {
+      flash(res.error ? `创建失败：${res.error}` : '创建失败')
+      return
+    }
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    flash('已创建文件夹')
+  }
+
+  const handleFilesSaveToDisk = async (): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) {
+      flash('请先选择文件夹')
+      return
+    }
+    if (!activeFile || activeFile.root !== fsRoot) {
+      await handleFilesSaveAsToDisk()
+      return
+    }
+    const content = getSavePayloadForRel(activeFile.rel)
+    const res = await window.desktop.fs.writeTextFile({ root: fsRoot, rel: activeFile.rel, content })
+    if (!res.ok) {
+      flash(res.error ? `保存失败：${res.error}` : '保存失败')
+      return
+    }
+    setActiveFileSavedSig(sigOf(content))
+    flash('已保存到文件')
+  }
+
+  const handleFilesSaveAsToDisk = async (): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) {
+      flash('请先选择文件夹')
+      return
+    }
+    const suggestedName = activeFile?.rel?.split('/').pop() || (editorFormat === 'markdown' ? 'article.md' : 'article.html')
+    const content = getSavePayloadForRel(suggestedName)
+    const res = await window.desktop.fs.saveAs({ root: fsRoot, suggestedName, content })
+    if (!res.ok || !res.rel) {
+      if (res && (res as any).canceled) return
+      flash(res.error ? `另存为失败：${res.error}` : '另存为失败')
+      return
+    }
+    setActiveFile({ root: fsRoot, rel: res.rel })
+    setActiveFileSavedSig(sigOf(content))
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    flash('已另存为')
+  }
+
+  const handleFilesNewFile = async (): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) {
+      flash('请先选择文件夹')
+      return
+    }
+    const name = window.prompt('新建文件（支持 .md / .html / .txt）', 'article.md')?.trim()
+    if (!name) return
+    const kind = fileExtKind(name)
+    if (kind === 'other') {
+      flash('仅支持 .md / .html / .txt')
+      return
+    }
+    const rel = name.replaceAll('\\', '/').replace(/^\//, '')
+    const content = kind === 'html' ? DEFAULT_CONTENT : ''
+    const res = await window.desktop.fs.writeTextFile({ root: fsRoot, rel, content })
+    if (!res.ok) {
+      flash(res.error ? `创建失败：${res.error}` : '创建失败')
+      return
+    }
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    await openDiskFile(rel)
+  }
+
+  const handleFilesRenamePathInline = async (fromRel: string, nextBase: string): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) return
+    if (!fromRel) {
+      flash('不能重命名根目录')
+      return
+    }
+    const base = relBaseName(fromRel)
+    const dir = relDirOf(fromRel)
+    const trimmed = (nextBase || '').trim()
+    if (!trimmed || trimmed === base) return
+    const toRel = joinRel(dir, trimmed).replace(/\s+/g, ' ').replace(/^\//, '')
+    const res = await window.desktop.fs.rename({ root: fsRoot, fromRel, toRel })
+    if (!res.ok) {
+      flash(res.error ? `重命名失败：${res.error}` : '重命名失败')
+      return
+    }
+    if (activeFile && activeFile.root === fsRoot && activeFile.rel === fromRel) {
+      setActiveFile({ root: fsRoot, rel: toRel })
+    }
+    if (fsSelectedRel === fromRel) setFsSelectedRel(toRel)
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    flash('已重命名')
+  }
+
+  const handleFilesDeletePath = async (rel: string): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) return
+    if (!rel) {
+      flash('不能删除根目录')
+      return
+    }
+    const ok = window.confirm(`删除：${rel}？\n\n此操作不可撤销。`)
+    if (!ok) return
+    const res = await window.desktop.fs.deletePath({ root: fsRoot, rel })
+    if (!res.ok) {
+      flash(res.error ? `删除失败：${res.error}` : '删除失败')
+      return
+    }
+    if (activeFile && activeFile.root === fsRoot && activeFile.rel === rel) {
+      setActiveFile(null)
+      setActiveFileSavedSig('')
+      setIsActiveFileDirty(false)
+    }
+    if (fsSelectedRel === rel) setFsSelectedRel('')
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    flash('已删除')
+  }
+
+  const handleFilesNewInDirInline = async (parentRel: string, kind: 'file' | 'folder', name: string): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) return
+    const trimmed = (name || '').trim()
+    if (!trimmed) return
+    const rel = joinRel(parentRel, trimmed).replace(/^\//, '')
+
+    if (kind === 'folder') {
+      const r = await window.desktop.fs.mkdir({ root: fsRoot, rel })
+      if (!r.ok) {
+        flash(r.error ? `创建失败：${r.error}` : '创建失败')
+        return
+      }
+      setFsDirCache({})
+      await ensureDirLoaded('')
+      setFsSelectedRel(rel)
+      flash('已创建文件夹')
+      return
+    }
+
+    const fileKind = fileExtKind(rel)
+    if (fileKind === 'other') {
+      flash('仅支持 .md / .html / .txt')
+      return
+    }
+    const content = fileKind === 'html' ? DEFAULT_CONTENT : ''
+    const r = await window.desktop.fs.writeTextFile({ root: fsRoot, rel, content })
+    if (!r.ok) {
+      flash(r.error ? `创建失败：${r.error}` : '创建失败')
+      return
+    }
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    setFsSelectedRel(rel)
+    await openDiskFile(rel)
+  }
+
+  const handleFilesMovePath = async (fromRel: string, toDirRel: string): Promise<void> => {
+    if (!window.desktop?.fs || !fsRoot) return
+    const from = String(fromRel || '').replaceAll('\\', '/')
+    if (!from) return
+    const toDir = normalizeRelDir(toDirRel)
+    const base = relBaseName(from)
+    if (!from || !base) return
+    const toRel = joinRel(toDir, base).replace(/^\//, '')
+    if (normalizeRelDir(from) === normalizeRelDir(toRel)) return
+    if (isRelDescendantOrSame(from, toRel)) {
+      flash('不能移动到自身或子目录')
+      return
+    }
+
+    const res = await window.desktop.fs.movePath({ root: fsRoot, fromRel: from, toRel })
+    if (!res.ok) {
+      flash(res.error ? `移动失败：${res.error}` : '移动失败')
+      return
+    }
+    if (activeFile && activeFile.root === fsRoot && activeFile.rel === from) {
+      setActiveFile({ root: fsRoot, rel: toRel })
+    }
+    if (fsSelectedRel === from) setFsSelectedRel(toRel)
+    setFsDirCache({})
+    await ensureDirLoaded('')
+    flash('已移动')
+  }
+
+  useEffect(() => {
+    if (!window.desktop?.fs || !fsRoot) return
+    const q = fsQuery.trim().toLowerCase()
+    fsSearchTokenRef.current += 1
+    const token = fsSearchTokenRef.current
+
+    if (q.length < 2) {
+      setFsSearchResults([])
+      setFsSearchRunning(false)
+      return
+    }
+
+    setFsSearchRunning(true)
+    setFsSearchResults([])
+
+    ;(async () => {
+      const maxDirs = 600
+      const maxFiles = 4000
+      const maxHits = 200
+
+      const queue: string[] = ['']
+      const seenDirs = new Set<string>()
+      const hits: FsSearchResult[] = []
+      let dirsScanned = 0
+      let filesSeen = 0
+
+      while (queue.length > 0) {
+        if (fsSearchTokenRef.current !== token) return
+        if (dirsScanned >= maxDirs) break
+        if (filesSeen >= maxFiles) break
+        if (hits.length >= maxHits) break
+
+        const dirRel = queue.shift()!
+        if (seenDirs.has(dirRel)) continue
+        seenDirs.add(dirRel)
+        dirsScanned += 1
+
+        const entries = await fsListDir(dirRel)
+        if (fsSearchTokenRef.current !== token) return
+
+        for (const e of entries) {
+          if (hits.length >= maxHits) break
+          if (e.isDir) {
+            queue.push(e.relPath)
+            continue
+          }
+          if (e.kind !== 'md' && e.kind !== 'html' && e.kind !== 'txt') continue
+          filesSeen += 1
+          if (e.name.toLowerCase().includes(q) || e.relPath.toLowerCase().includes(q)) {
+            hits.push({ rel: e.relPath, name: e.name, kind: e.kind })
+          }
+        }
+      }
+
+      if (fsSearchTokenRef.current !== token) return
+      setFsSearchResults(hits)
+      setFsSearchRunning(false)
+    })().catch(() => {
+      if (fsSearchTokenRef.current !== token) return
+      setFsSearchRunning(false)
+    })
+  }, [fsQuery, fsRoot])
+
+  const newDraftId = (): string => {
+    try {
+      if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return (crypto as Crypto).randomUUID()
+    } catch {
+      // ignore
+    }
+    return `draft_${Date.now()}_${Math.random().toString(16).slice(2)}`
+  }
+
+  const getCurrentDocSnapshot = (): Pick<DraftItem, 'editorFormat' | 'html' | 'markdown'> => {
+    if (editorFormat === 'markdown') {
+      const md = markdownText
+      const html = markdownToHtml(md)
+      return { editorFormat: 'markdown', html, markdown: md }
+    }
+    const html = editor ? editor.getHTML() : currentHtml
+    return { editorFormat: 'rich', html, markdown: undefined }
+  }
+
+  const applyDraftToEditor = (draft: DraftItem): void => {
+    const nextHtml = draft.html
+    const nextMd = draft.markdown
+
+    // Avoid the markdown sync effect overwriting our saved Markdown text.
+    isMarkdownTypingRef.current = draft.editorFormat === 'markdown'
+
+    if (editor) {
+      try {
+        editor.commands.setContent(nextHtml)
+      } catch {
+        // ignore
+      }
+    }
+
+    safeWriteLocalStorage(STORAGE_KEY, nextHtml)
+    setCurrentHtml(nextHtml)
+
+    if (draft.editorFormat === 'markdown') {
+      setEditorFormat('markdown')
+      setMarkdownText(nextMd ?? htmlToMarkdown(nextHtml))
+      window.setTimeout(() => {
+        isMarkdownTypingRef.current = false
+      }, 350)
+    } else {
+      isMarkdownTypingRef.current = false
+      setEditorFormat('rich')
+    }
+  }
+
+  function handleFilesNewDraft() {
+    const name = window.prompt('新建草稿：请输入名称', '未命名')?.trim()
+    if (!name) return
+
+    const id = newDraftId()
+    const next: DraftItem = {
+      id,
+      name,
+      updatedAt: Date.now(),
+      editorFormat: 'rich',
+      html: DEFAULT_CONTENT,
+    }
+
+    setDrafts((prev) => [next, ...prev].sort((a, b) => b.updatedAt - a.updatedAt))
+    setActiveDraftId(id)
+    applyDraftToEditor(next)
+    flash('已新建草稿')
+  }
+
+  function handleFilesSaveDraft() {
+    const snap = getCurrentDocSnapshot()
+
+    const existing = activeDraftId ? drafts.find((d) => d.id === activeDraftId) : undefined
+    const name = existing?.name ?? window.prompt('保存为草稿：请输入名称', '未命名')?.trim()
+    if (!name) return
+
+    const id = existing?.id ?? newDraftId()
+    const next: DraftItem = {
+      id,
+      name,
+      updatedAt: Date.now(),
+      editorFormat: snap.editorFormat,
+      html: snap.html,
+      markdown: snap.markdown,
+    }
+
+    setDrafts((prev) => {
+      const rest = prev.filter((d) => d.id !== id)
+      return [next, ...rest].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 200)
+    })
+    setActiveDraftId(id)
+    flash('已保存草稿')
+  }
+
+  function handleFilesOpenDraft(id: string) {
+    const draft = drafts.find((d) => d.id === id)
+    if (!draft) return
+    const ok = window.confirm(`打开草稿：${draft.name}\n\n提示：当前未保存的内容可能会丢失。`)
+    if (!ok) return
+
+    setActiveDraftId(draft.id)
+    applyDraftToEditor(draft)
+    flash('已打开草稿')
+  }
+
+  function handleFilesRenameDraft(id: string) {
+    const draft = drafts.find((d) => d.id === id)
+    if (!draft) return
+    const name = window.prompt('重命名草稿', draft.name)?.trim()
+    if (!name) return
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, name, updatedAt: Date.now() } : d)).sort((a, b) => b.updatedAt - a.updatedAt))
+    flash('已重命名')
+  }
+
+  function handleFilesDeleteDraft(id: string) {
+    const draft = drafts.find((d) => d.id === id)
+    if (!draft) return
+    const ok = window.confirm(`删除草稿：${draft.name}？\n\n此操作不可撤销。`)
+    if (!ok) return
+    setDrafts((prev) => prev.filter((d) => d.id !== id))
+    setActiveDraftId((prev) => (prev === id ? null : prev))
+    flash('已删除草稿')
+  }
+
+  function handleFilesResizePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (!librarySplitRef.current) return
+    e.preventDefault()
+    filesResizeActiveRef.current = true
+    const container = librarySplitRef.current
+    const rect = container.getBoundingClientRect()
+
+    const minBottom = 120
+    const minTop = 220
+
+    const onMove = (ev: PointerEvent) => {
+      if (!filesResizeActiveRef.current) return
+      const r = container.getBoundingClientRect()
+      const maxBottom = Math.max(minBottom, Math.floor(r.height - minTop))
+      const next = Math.round(r.bottom - ev.clientY)
+      setFilesPanelHeight(Math.max(minBottom, Math.min(maxBottom, next)))
+    }
+
+    const onUp = () => {
+      filesResizeActiveRef.current = false
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+
+    // Start from current pointer position.
+    setFilesPanelHeight((prev) => {
+      const maxBottom = Math.max(minBottom, Math.floor(rect.height - minTop))
+      const next = Math.round(rect.bottom - e.clientY)
+      return Math.max(minBottom, Math.min(maxBottom, Number.isFinite(prev) ? next : minBottom))
+    })
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
   function closeMoreMenu() {
     if (moreMenuRef.current) moreMenuRef.current.open = false
   }
@@ -970,9 +2021,12 @@ export default function WeChatEditor() {
     const c = COMPONENTS.find((x) => x.id === componentId)
     if (!c) return
 
-    if (c.config && c.render) {
+    const schema = getComponentSchema(c)
+    const renderer = getComponentRenderer(c)
+
+    if (schema && renderer) {
       const saved = readSavedComponentConfigValues(c.id)
-      const defaults = getDefaultComponentConfigValues(c.config)
+      const defaults = getDefaultComponentValues(c, schema)
       setComponentConfigTargetId(c.id)
       setComponentConfigValues({ ...defaults, ...(saved ?? {}) })
       setIsComponentConfigOpen(true)
@@ -995,10 +2049,13 @@ export default function WeChatEditor() {
     }
 
     const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
-    if (!c?.config || !c.render) return
+    if (!c) return
+    const schema = getComponentSchema(c)
+    const renderer = getComponentRenderer(c)
+    if (!schema || !renderer) return
 
     writeSavedComponentConfigValues(c.id, componentPropsValues)
-    const rendered = c.render(componentPropsValues)
+    const rendered = renderer(componentPropsValues) as ReturnType<NonNullable<ComponentItem['render']>>
 
     if (editorFormat === 'markdown') {
       const start = selectedComponent.sourceStart
@@ -1006,6 +2063,40 @@ export default function WeChatEditor() {
       if (typeof start !== 'number' || typeof end !== 'number') {
         flash('Markdown 模式：请把光标放在组件 HTML 块内再应用')
         return
+      }
+
+      if (COMPONENTS_PRESERVE_BODY.has(c.id)) {
+        if (c.id === 'royalFrameScroll') {
+          const style = componentPropsValues.style || 'royal'
+          const clsTone = toneClass(componentPropsValues)
+          const blockquoteClass =
+            style === 'tone'
+              ? ['frame', 'frame--tone', clsTone].filter(Boolean).join(' ')
+              : 'frame frame--royal'
+          const propsRaw = escapeHtmlAttr(encodeComponentProps(componentPropsValues))
+
+          const titleText = (componentPropsValues.title || '活动公告').trim() || '活动公告'
+          const titleEscaped = escapeHtml(titleText)
+
+          const block = markdownText.slice(start, end)
+          const openEnd = block.indexOf('>')
+          if (openEnd < 0) {
+            flash('Markdown 模式：无法识别组件开标签')
+            return
+          }
+
+          const newOpenTag = `<blockquote class="${blockquoteClass}" data-wce-component="royalFrameScroll" data-wce-props="${propsRaw}">`
+          let nextBlock = `${newOpenTag}${block.slice(openEnd + 1)}`
+          nextBlock = nextBlock.replace(
+            /<p\s+class="frame__kicker"[^>]*>\s*<strong>[\s\S]*?<\/strong>\s*<\/p>/i,
+            `<p class="frame__kicker"><strong>${titleEscaped}</strong></p>`,
+          )
+
+          const nextText = `${markdownText.slice(0, start)}${nextBlock}${markdownText.slice(end)}`
+          handleMarkdownChange(nextText)
+          flash(`已更新组件：${c.name}`)
+          return
+        }
       }
 
       if (!('html' in rendered)) {
@@ -1025,19 +2116,295 @@ export default function WeChatEditor() {
       return
     }
 
+    if (COMPONENTS_PRESERVE_BODY.has(c.id)) {
+      const state = editor.state
+      const tr = state.tr
+      const from = selectedComponent.from
+      const $pos = state.doc.resolve(from)
+      const node = $pos.nodeAfter
+      if (!node) {
+        flash('未选中可编辑组件：请先在正文中点一下组件块')
+        return
+      }
+
+      if (c.id === 'royalFrameScroll') {
+        const style = componentPropsValues.style || 'royal'
+        const clsTone = toneClass(componentPropsValues)
+        const blockquoteClass =
+          style === 'tone'
+            ? ['frame', 'frame--tone', clsTone].filter(Boolean).join(' ')
+            : 'frame frame--royal'
+        const propsRaw = escapeHtmlAttr(encodeComponentProps(componentPropsValues))
+
+        tr.setNodeMarkup(from, undefined, {
+          ...node.attrs,
+          class: blockquoteClass,
+          wceComponent: 'royalFrameScroll',
+          wceProps: propsRaw,
+        })
+
+        const titleText = (componentPropsValues.title || '活动公告').trim() || '活动公告'
+        const titleNodeText = titleText
+        const boldMarkType = state.schema.marks.bold
+        const textNode = state.schema.text(titleNodeText, boldMarkType ? [boldMarkType.create()] : [])
+
+        let kickerOffset: number | null = null
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let kickerChild: any = null
+        node.forEach((child, offset) => {
+          if (kickerOffset != null) return
+          if (child.type.name !== 'paragraph') return
+          const cls = typeof child.attrs.class === 'string' ? (child.attrs.class as string) : ''
+          if (!cls.includes('frame__kicker')) return
+          kickerOffset = offset
+          kickerChild = child
+        })
+
+        if (kickerOffset != null && kickerChild) {
+          const childPos = from + 1 + kickerOffset
+          const pType = state.schema.nodes.paragraph
+          const newPara = pType.create(kickerChild.attrs, textNode)
+          tr.replaceWith(childPos, childPos + kickerChild.nodeSize, newPara)
+        }
+      }
+
+      editor.view.dispatch(tr)
+      flash(`已更新组件：${c.name}`)
+      return
+    }
+
     const range = { from: selectedComponent.from, to: selectedComponent.to }
     if ('content' in rendered) editor.chain().focus().insertContentAt(range, rendered.content).run()
     else editor.chain().focus().insertContentAt(range, rendered.html).run()
     flash(`已更新组件：${c.name}`)
   }
 
+  function handleResetSelectedComponentDefaults() {
+    if (!selectedComponent) {
+      flash('未选中可编辑组件：请先在正文中点一下组件块')
+      return
+    }
+
+    const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
+    if (!c) return
+    const schema = getComponentSchema(c)
+    if (!schema) return
+
+    setComponentPropsValues(getDefaultComponentValues(c, schema))
+    flash('已重置为默认参数（未自动应用）')
+  }
+
+  function handleCopyStyleToSameComponents() {
+    if (!selectedComponent) {
+      flash('未选中可编辑组件：请先在正文中点一下组件块')
+      return
+    }
+
+    const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
+    if (!c) return
+    const schema = getComponentSchema(c)
+    const renderer = getComponentRenderer(c)
+    if (!schema || !renderer) return
+
+    const styleKeys = getStyleKeys(schema)
+    if (styleKeys.length === 0) {
+      flash('该组件没有可复制的样式字段')
+      return
+    }
+
+    const stylePatch: Record<string, string> = {}
+    for (const k of styleKeys) stylePatch[k] = componentPropsValues[k] ?? ''
+
+    const ok = window.confirm(
+      '复制当前“样式”到本文所有同类组件？\n\n提示：只复制样式字段（如色系/风格），不会覆盖标题/正文等内容字段。',
+    )
+    if (!ok) return
+
+    // Markdown: operate on textarea HTML blocks.
+    if (editorFormat === 'markdown') {
+      const indices: number[] = []
+      const needle = `data-wce-component="${c.id}"`
+      let scan = 0
+      while (scan < markdownText.length) {
+        const idx = markdownText.indexOf(needle, scan)
+        if (idx < 0) break
+        indices.push(idx)
+        scan = idx + needle.length
+      }
+
+      if (indices.length === 0) {
+        flash('Markdown 模式：未找到同类组件块')
+        return
+      }
+
+      const instances: Array<{ start: number; end: number; values: Record<string, string> }> = []
+      for (const idx of indices) {
+        const found = probeMarkdownComponentAtIndex(markdownText, idx)
+        if (!found) continue
+        if (found.componentId !== c.id) continue
+        if (typeof found.sourceStart !== 'number' || typeof found.sourceEnd !== 'number') continue
+        {
+          const block = markdownText.slice(found.sourceStart, found.sourceEnd)
+          const openEnd = block.indexOf('>')
+          const openTag = openEnd >= 0 ? block.slice(0, openEnd + 1) : ''
+          const hasProps = /\bdata-wce-props\s*=\s*("|')[^"']*\1/i.test(openTag)
+          if (!hasProps) continue
+        }
+        instances.push({ start: found.sourceStart, end: found.sourceEnd, values: found.values })
+      }
+
+      instances.sort((a, b) => b.start - a.start)
+
+      let nextText = markdownText
+      let applied = 0
+
+      for (const inst of instances) {
+        if (inst.start < 0 || inst.end <= inst.start) continue
+        if (inst.end > nextText.length) continue
+
+        const nextValues = { ...inst.values, ...stylePatch }
+        const rendered = renderer(nextValues) as any
+
+        if (COMPONENTS_PRESERVE_BODY.has(c.id) && c.id === 'royalFrameScroll') {
+          const style = nextValues.style || 'royal'
+          const clsTone = toneClass(nextValues)
+          const blockquoteClass =
+            style === 'tone'
+              ? ['frame', 'frame--tone', clsTone].filter(Boolean).join(' ')
+              : 'frame frame--royal'
+          const propsRaw = escapeHtmlAttr(encodeComponentProps(nextValues))
+
+          const titleText = (nextValues.title || '活动公告').trim() || '活动公告'
+          const titleEscaped = escapeHtml(titleText)
+
+          const block = nextText.slice(inst.start, inst.end)
+          const openEnd = block.indexOf('>')
+          if (openEnd < 0) continue
+
+          const newOpenTag = `<blockquote class="${blockquoteClass}" data-wce-component="royalFrameScroll" data-wce-props="${propsRaw}">`
+          let updated = `${newOpenTag}${block.slice(openEnd + 1)}`
+          updated = updated.replace(
+            /<p\s+class="frame__kicker"[^>]*>\s*<strong>[\s\S]*?<\/strong>\s*<\/p>/i,
+            `<p class="frame__kicker"><strong>${titleEscaped}</strong></p>`,
+          )
+
+          nextText = `${nextText.slice(0, inst.start)}${updated}${nextText.slice(inst.end)}`
+          applied += 1
+          continue
+        }
+
+        if (!rendered || typeof rendered.html !== 'string') continue
+        const html = rendered.html.replace(/<p><\/p>\s*$/i, '').trim()
+        nextText = `${nextText.slice(0, inst.start)}${html}\n\n${nextText.slice(inst.end)}`
+        applied += 1
+      }
+
+      handleMarkdownChange(nextText)
+      flash(`已复制样式到同类组件：${applied} 处`)
+      return
+    }
+
+    // Rich: traverse PM document and update all nodes with matching wceComponent.
+    if (!ensureEditor()) return
+
+    const defaults = getDefaultComponentValues(c, schema)
+    const saved = readSavedComponentConfigValues(c.id) ?? {}
+
+    const targets: Array<{ from: number; to: number; values: Record<string, string> }> = []
+    editor.state.doc.descendants((node: PMNode, pos: number) => {
+      const attrs = (node?.attrs ?? {}) as Record<string, unknown>
+      const nodeComponentId = typeof attrs.wceComponent === 'string' ? (attrs.wceComponent as string) : ''
+      if (nodeComponentId !== c.id) return
+
+      const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
+      if (!rawProps) return
+      const decoded = rawProps ? decodeComponentProps(rawProps) : null
+      const base = { ...defaults, ...saved, ...(decoded ?? {}) }
+      const nextValues = { ...base, ...stylePatch }
+
+      targets.push({ from: pos, to: pos + node.nodeSize, values: nextValues })
+    })
+
+    if (targets.length === 0) {
+      flash('未找到同类组件块')
+      return
+    }
+
+    targets.sort((a, b) => b.from - a.from)
+
+    let applied = 0
+    for (const t of targets) {
+      const rendered = renderer(t.values) as any
+
+      if (COMPONENTS_PRESERVE_BODY.has(c.id) && c.id === 'royalFrameScroll') {
+        const state = editor.state
+        const tr = state.tr
+        const from = t.from
+        const node = state.doc.nodeAt(from)
+        if (!node) continue
+
+        const style = t.values.style || 'royal'
+        const clsTone = toneClass(t.values)
+        const blockquoteClass =
+          style === 'tone'
+            ? ['frame', 'frame--tone', clsTone].filter(Boolean).join(' ')
+            : 'frame frame--royal'
+        const propsRaw = escapeHtmlAttr(encodeComponentProps(t.values))
+
+        tr.setNodeMarkup(from, undefined, {
+          ...node.attrs,
+          class: blockquoteClass,
+          wceComponent: 'royalFrameScroll',
+          wceProps: propsRaw,
+        })
+
+        const titleText = (t.values.title || '活动公告').trim() || '活动公告'
+        const boldMarkType = state.schema.marks.bold
+        const textNode = state.schema.text(titleText, boldMarkType ? [boldMarkType.create()] : [])
+
+        let kickerOffset: number | null = null
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let kickerChild: any = null
+        node.forEach((child: PMNode, offset: number) => {
+          if (kickerOffset != null) return
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const anyChild = child as any
+          if (anyChild.type?.name !== 'paragraph') return
+          const cls = typeof (anyChild.attrs?.class) === 'string' ? (anyChild.attrs.class as string) : ''
+          if (!cls.includes('frame__kicker')) return
+          kickerOffset = offset
+          kickerChild = child
+        })
+
+        if (kickerOffset != null && kickerChild) {
+          const childPos = from + 1 + kickerOffset
+          const pType = state.schema.nodes.paragraph
+          const newPara = pType.create((kickerChild as any).attrs, textNode)
+          tr.replaceWith(childPos, childPos + (kickerChild as any).nodeSize, newPara)
+        }
+
+        editor.view.dispatch(tr)
+        applied += 1
+        continue
+      }
+
+      editor.chain().focus().insertContentAt({ from: t.from, to: t.to }, rendered.content ?? rendered.html).run()
+      applied += 1
+    }
+
+    flash(`已复制样式到同类组件：${applied} 处`)
+  }
+
   function handleConfirmInsertConfiguredComponent() {
     if (!ensureEditor()) return
     const c = componentConfigTarget
-    if (!c || !c.config || !c.render) return
+    if (!c) return
+    const schema = getComponentSchema(c)
+    const renderer = getComponentRenderer(c)
+    if (!schema || !renderer) return
 
     writeSavedComponentConfigValues(c.id, componentConfigValues)
-    const rendered = c.render(componentConfigValues)
+    const rendered = renderer(componentConfigValues) as ReturnType<NonNullable<ComponentItem['render']>>
     if ('content' in rendered) {
       editor.chain().focus().insertContent(rendered.content).run()
     } else {
@@ -1198,6 +2565,22 @@ export default function WeChatEditor() {
 
   function handlePickLocalImage() {
     fileInputRef.current?.click()
+  }
+
+  function applySelectedImageStyle(nextStyle: ImageStyleId): void {
+    if (!ensureEditor()) return
+    if (!editor.isActive('image')) {
+      flash('请先点选一张图片')
+      return
+    }
+    setImageStyle(nextStyle)
+    editor
+      .chain()
+      .focus()
+      .updateAttributes('image', {
+        class: nextStyle || null,
+      })
+      .run()
   }
 
   async function handleLocalImageChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1858,7 +3241,8 @@ export default function WeChatEditor() {
 
       <main className={`wechatMain wechatMain--${viewMode}`}>
         <aside className="wechatLibraryDock" aria-label="素材库">
-          <aside className="wechatLibrary" aria-label="素材库">
+          <div className="wechatLibrarySplit" ref={librarySplitRef}>
+            <aside className="wechatLibrary wechatLibrary--top" aria-label="素材库">
             <div className="wechatLibrary__tabs" role="tablist" aria-label="素材库">
               <button
                 type="button"
@@ -1940,8 +3324,48 @@ export default function WeChatEditor() {
                               onClick={() => handleInsertComponent(c.id)}
                               title={c.desc ?? c.name}
                             >
-                              <div className="wechatCardBtn__title">{c.name}</div>
-                              {c.desc && <div className="wechatCardBtn__desc">{c.desc}</div>}
+                              {(() => {
+                                const desc = c.desc ?? c.description
+                                const schema = getComponentSchema(c)
+                                const renderer = getComponentRenderer(c)
+                                const isEditable = Boolean(schema && renderer)
+                                const tags = (c.tags ?? []).filter((t) => typeof t === 'string' && t.trim().length > 0)
+                                const catLabel = COMPONENT_CATEGORY_LABEL[toUiCategory(c.category)]
+                                const thumbText = (catLabel || c.name || c.id).slice(0, 2)
+
+                                return (
+                                  <>
+                                    <div className="wechatCardBtn__row">
+                                      <div className="wechatCardBtn__thumb" aria-hidden="true">
+                                        {c.previewThumb ? (
+                                          <img className="wechatCardBtn__thumbImg" src={c.previewThumb} alt="" loading="lazy" />
+                                        ) : (
+                                          <div className="wechatCardBtn__thumbPh">{thumbText}</div>
+                                        )}
+                                      </div>
+
+                                      <div className="wechatCardBtn__main">
+                                        <div className="wechatCardBtn__titleRow">
+                                          <div className="wechatCardBtn__title">{c.name}</div>
+                                          {isEditable && <span className="wechatBadge">可编辑</span>}
+                                        </div>
+                                        <div className="wechatCardBtn__meta">{c.id}</div>
+                                        {desc && <div className="wechatCardBtn__desc">{desc}</div>}
+                                      </div>
+                                    </div>
+
+                                    {tags.length > 0 && (
+                                      <div className="wechatCardBtn__tags" aria-label="标签">
+                                        {tags.slice(0, 4).map((t) => (
+                                          <span key={t} className="wechatTag">
+                                            {t}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </>
+                                )
+                              })()}
                             </button>
                           ))}
                         </div>
@@ -2009,7 +3433,8 @@ export default function WeChatEditor() {
                 ) : (
                   (() => {
                     const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
-                    if (!c?.config) return <div className="wechatLibrary__empty">该组件暂不支持属性编辑</div>
+                    const schema = c ? getComponentSchema(c) : null
+                    if (!c || !schema) return <div className="wechatLibrary__empty">该组件暂不支持属性编辑</div>
 
                     return (
                       <>
@@ -2018,7 +3443,7 @@ export default function WeChatEditor() {
                           <div className="wechatProps__id">{c.id}</div>
                         </div>
 
-                        {c.config.fields.map((f) => (
+                        {schema.fields.map((f) => (
                           <label key={f.key} className="wechatProps__field">
                             <div className="wechatProps__label">{f.label}</div>
                             {f.type === 'select' ? (
@@ -2070,6 +3495,15 @@ export default function WeChatEditor() {
                           <button type="button" className="wechatPrimaryAction" onClick={handleApplySelectedComponentProps}>
                             应用到当前组件
                           </button>
+
+                          <div className="wechatProps__actionsRow">
+                            <button type="button" className="wechatSecondaryAction" onClick={handleResetSelectedComponentDefaults}>
+                              重置默认
+                            </button>
+                            <button type="button" className="wechatSecondaryAction" onClick={handleCopyStyleToSameComponents}>
+                              复制样式到同类
+                            </button>
+                          </div>
                         </div>
                       </>
                     )
@@ -2077,7 +3511,592 @@ export default function WeChatEditor() {
                 )}
               </div>
             )}
-          </aside>
+            </aside>
+
+            <div
+              className="wechatLibraryResizer"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="调整文件面板高度"
+              tabIndex={0}
+              onPointerDown={handleFilesResizePointerDown}
+            />
+
+            <aside className="wechatFiles" aria-label="文件" style={{ height: filesPanelHeight }}>
+              <div className="wechatFiles__header">
+                <div className="wechatFiles__title">文件</div>
+
+                <div className="wechatFiles__tabs" role="tablist" aria-label="文件面板">
+                  <button
+                    type="button"
+                    className={`wechatPill wechatPill--sm ${filesTab === 'drafts' ? 'is-active' : ''}`}
+                    role="tab"
+                    aria-selected={filesTab === 'drafts'}
+                    onClick={() => setFilesTab('drafts')}
+                  >
+                    草稿
+                  </button>
+                  <button
+                    type="button"
+                    className={`wechatPill wechatPill--sm ${filesTab === 'files' ? 'is-active' : ''}`}
+                    role="tab"
+                    aria-selected={filesTab === 'files'}
+                    onClick={async () => {
+                      setFilesTab('files')
+                      if (hasDesktopFs && fsRoot) await ensureDirLoaded('')
+                    }}
+                  >
+                    目录
+                  </button>
+                </div>
+
+                <div className="wechatFiles__actions">
+                  {filesTab === 'drafts' ? (
+                    <>
+                      <button type="button" className="wechatMiniBtn" onClick={handleFilesNewDraft} title="新建草稿">
+                        新建
+                      </button>
+                      <button type="button" className="wechatMiniBtn wechatMiniBtn--primary" onClick={handleFilesSaveDraft} title="保存到草稿">
+                        保存
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="wechatMiniBtn" onClick={handleFilesPickRoot} title="选择文件夹">
+                        选文件夹
+                      </button>
+                      <button type="button" className="wechatMiniBtn" onClick={handleFilesRefresh} title="刷新目录">
+                        刷新
+                      </button>
+                      <button type="button" className="wechatMiniBtn" onClick={handleFilesNewFile} title="新建文件">
+                        新建文件
+                      </button>
+                      <button type="button" className="wechatMiniBtn" onClick={handleFilesNewFolder} title="新建文件夹">
+                        新建文件夹
+                      </button>
+                      <button type="button" className="wechatMiniBtn wechatMiniBtn--primary" onClick={handleFilesSaveToDisk} title="保存到文件">
+                        保存
+                      </button>
+                      <button type="button" className="wechatMiniBtn" onClick={handleFilesSaveAsToDisk} title="另存为">
+                        另存为
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="wechatFiles__body" role="tree" aria-label="草稿列表">
+                {filesTab === 'drafts' ? (
+                  drafts.length === 0 ? (
+                    <div className="wechatFiles__empty">还没有草稿。点“保存”即可把当前内容存为草稿。</div>
+                  ) : (
+                    drafts.map((d) => {
+                      const isActive = activeDraftId === d.id
+                      return (
+                        <div key={d.id} className={`wechatFileRow ${isActive ? 'is-active' : ''}`} role="treeitem" aria-selected={isActive}>
+                          <button
+                            type="button"
+                            className="wechatFileRow__main"
+                            onClick={() => handleFilesOpenDraft(d.id)}
+                            title={d.name}
+                          >
+                            <div className="wechatFileRow__name">{d.name}</div>
+                            <div className="wechatFileRow__meta">
+                              {d.editorFormat === 'markdown' ? 'Markdown' : '富文本'} · {getDraftDisplayTime(d.updatedAt)}
+                            </div>
+                          </button>
+
+                          <div className="wechatFileRow__actions">
+                            <button
+                              type="button"
+                              className="wechatMiniBtn"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleFilesRenameDraft(d.id)
+                              }}
+                              title="重命名"
+                            >
+                              重命名
+                            </button>
+                            <button
+                              type="button"
+                              className="wechatMiniBtn"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleFilesDeleteDraft(d.id)
+                              }}
+                              title="删除"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )
+                ) : !hasDesktopFs ? (
+                  <div className="wechatFiles__empty">目录功能仅桌面版可用。</div>
+                ) : !fsRoot ? (
+                  <div className="wechatFiles__empty">请先点“选文件夹”。</div>
+                ) : (
+                  <div className="wechatTree" role="tree" aria-label="文件目录">
+                    <div className="wechatTree__hint">
+                      根目录：{fsRoot}
+                      {activeFile && activeFile.root === fsRoot && (
+                        <span className="wechatTree__activeFile">
+                          当前：{activeFile.rel}
+                          {isActiveFileDirty ? <strong className="wechatDirtyDot"> ●</strong> : null}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="wechatTree__tools" aria-label="文件筛选">
+                      <input
+                        className="wechatLibrary__search"
+                        value={fsQuery}
+                        onChange={(e) => setFsQuery(e.target.value)}
+                        placeholder="搜索文件（输入 2 个字符以上）"
+                      />
+
+                      <div className="wechatTree__filters" role="group" aria-label="类型筛选">
+                        <button
+                          type="button"
+                          className={`wechatPill wechatPill--sm ${fsKindFilter === 'all' ? 'is-active' : ''}`}
+                          onClick={() => setFsKindFilter('all')}
+                        >
+                          全部
+                        </button>
+                        <button
+                          type="button"
+                          className={`wechatPill wechatPill--sm ${fsKindFilter === 'md' ? 'is-active' : ''}`}
+                          onClick={() => setFsKindFilter('md')}
+                        >
+                          md
+                        </button>
+                        <button
+                          type="button"
+                          className={`wechatPill wechatPill--sm ${fsKindFilter === 'html' ? 'is-active' : ''}`}
+                          onClick={() => setFsKindFilter('html')}
+                        >
+                          html
+                        </button>
+                        <button
+                          type="button"
+                          className={`wechatPill wechatPill--sm ${fsKindFilter === 'txt' ? 'is-active' : ''}`}
+                          onClick={() => setFsKindFilter('txt')}
+                        >
+                          txt
+                        </button>
+                      </div>
+                    </div>
+
+                    {fsQuery.trim().length >= 2 && (
+                      <div className="wechatTree__search" aria-label="搜索结果">
+                        <div className="wechatTree__searchTitle">
+                          搜索结果 {fsSearchRunning ? '（搜索中…）' : `（${fsSearchResults.length}）`}
+                        </div>
+                        {fsSearchResults.length === 0 && !fsSearchRunning ? (
+                          <div className="wechatFiles__empty">没有匹配的文件。</div>
+                        ) : (
+                          fsSearchResults
+                            .filter((r) => fsKindFilter === 'all' || r.kind === fsKindFilter)
+                            .slice(0, 80)
+                            .map((r) => {
+                              const isActive = !!activeFile && activeFile.root === fsRoot && activeFile.rel === r.rel
+                              const isSelected = fsSelectedRel === r.rel
+                              return (
+                                <div
+                                  key={r.rel}
+                                  className={`wechatTreeRow ${isActive ? 'is-active' : ''} ${isSelected ? 'is-selected' : ''}`}
+                                  style={{ paddingLeft: 10 }}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault()
+                                    setFsSelectedRel(r.rel)
+                                    setFsContextMenu({ x: e.clientX, y: e.clientY, rel: r.rel, isDir: false })
+                                  }}
+                                  draggable
+                                  onDragStart={(e) => {
+                                    e.dataTransfer.setData('text/wce-rel', r.rel)
+                                    e.dataTransfer.setData('text/wce-isdir', '0')
+                                    e.dataTransfer.effectAllowed = 'move'
+                                  }}
+                                >
+                                  <span className="wechatTreeRow__twisty wechatTreeRow__twisty--leaf" aria-hidden="true">
+                                    •
+                                  </span>
+                                  <button type="button" className="wechatTreeRow__label" onClick={() => openDiskFile(r.rel)} title={r.rel}>
+                                    <span className="wechatTreeRow__name">
+                                      {r.rel}
+                                      {isActive && isActiveFileDirty ? <strong className="wechatDirtyDot"> ●</strong> : null}
+                                    </span>
+                                    <span className="wechatTreeRow__ext">{r.kind}</span>
+                                  </button>
+                                </div>
+                              )
+                            })
+                        )}
+                      </div>
+                    )}
+
+                    {(() => {
+                      const renderInlineNewRow = (dirRel: string, depth: number) => {
+                        if (!fsInlineAction) return null
+                        if (fsInlineAction.type !== 'newFile' && fsInlineAction.type !== 'newFolder') return null
+                        if (normalizeRelDir(fsInlineAction.targetRel) !== normalizeRelDir(dirRel)) return null
+                        return (
+                          <div className="wechatTreeRow wechatTreeRow--inline" style={{ paddingLeft: 10 + depth * 14 }}>
+                            <span className="wechatTreeRow__twisty wechatTreeRow__twisty--leaf" aria-hidden="true">
+                              ＋
+                            </span>
+                            <span className="wechatTreeRow__label" style={{ width: '100%' }}>
+                              <input
+                                ref={fsInlineInputRef}
+                                className="wechatTreeInlineInput"
+                                placeholder={fsInlineAction.type === 'newFolder' ? '新建文件夹名' : '新建文件名（.md/.html/.txt）'}
+                                defaultValue=""
+                                onKeyDown={async (e) => {
+                                  if (e.key === 'Escape') {
+                                    e.preventDefault()
+                                    setFsInlineAction(null)
+                                  }
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    const v = (e.currentTarget.value || '').trim()
+                                    if (!v) return
+                                    await handleFilesNewInDirInline(
+                                      dirRel,
+                                      fsInlineAction.type === 'newFolder' ? 'folder' : 'file',
+                                      v,
+                                    )
+                                    setFsInlineAction(null)
+                                  }
+                                }}
+                              />
+                            </span>
+                          </div>
+                        )
+                      }
+
+                      const renderDir = (dirRel: string, depth: number) => {
+                        const entries = (fsDirCache[dirRel] ?? []).filter((e) => {
+                          if (e.isDir) return true
+                          if (fsKindFilter === 'all') return e.kind === 'md' || e.kind === 'html' || e.kind === 'txt'
+                          return e.kind === fsKindFilter
+                        })
+
+                        const inlineNewRow = renderInlineNewRow(dirRel, depth)
+
+                        return (
+                          <div className="wechatTree__group" key={dirRel}>
+                            {inlineNewRow}
+                            {entries.map((e) => {
+                              const isDir = e.isDir
+                              const isOpen = isDir && fsExpanded.has(e.relPath)
+                              const isActive = !!activeFile && activeFile.root === fsRoot && activeFile.rel === e.relPath
+                              const isSelected = fsSelectedRel === e.relPath
+                              const isRenaming = fsInlineAction?.type === 'rename' && normalizeRelDir(fsInlineAction.targetRel) === normalizeRelDir(e.relPath)
+                              return (
+                                <React.Fragment key={e.relPath}>
+                                  <div
+                                    className={`wechatTreeRow ${isActive ? 'is-active' : ''} ${isSelected ? 'is-selected' : ''} ${isRenaming ? 'wechatTreeRow--inline' : ''}`}
+                                    style={{ paddingLeft: 10 + depth * 14 }}
+                                    onContextMenu={(ev) => {
+                                      ev.preventDefault()
+                                      setFsSelectedRel(e.relPath)
+                                      setFsContextMenu({ x: ev.clientX, y: ev.clientY, rel: e.relPath, isDir })
+                                    }}
+                                    draggable={e.relPath !== ''}
+                                    onDragStart={(ev) => {
+                                      if (!e.relPath) return
+                                      ev.dataTransfer.setData('text/wce-rel', e.relPath)
+                                      ev.dataTransfer.setData('text/wce-isdir', isDir ? '1' : '0')
+                                      ev.dataTransfer.effectAllowed = 'move'
+                                    }}
+                                    onDragOver={(ev) => {
+                                      if (!isDir) return
+                                      ev.preventDefault()
+                                    }}
+                                    onDrop={async (ev) => {
+                                      if (!isDir) return
+                                      ev.preventDefault()
+                                      const fromRel = ev.dataTransfer.getData('text/wce-rel')
+                                      const fromIsDir = ev.dataTransfer.getData('text/wce-isdir') === '1'
+                                      if (!fromRel) return
+                                      if (fromIsDir && isRelDescendantOrSame(fromRel, e.relPath)) return
+                                      await handleFilesMovePath(fromRel, e.relPath)
+                                    }}
+                                  >
+                                    {isDir ? (
+                                      <button
+                                        type="button"
+                                        className="wechatTreeRow__twisty"
+                                        onClick={() => toggleDir(e.relPath)}
+                                        title={isOpen ? '折叠' : '展开'}
+                                      >
+                                        {isOpen ? '▾' : '▸'}
+                                      </button>
+                                    ) : (
+                                      <span className="wechatTreeRow__twisty wechatTreeRow__twisty--leaf" aria-hidden="true">
+                                        •
+                                      </span>
+                                    )}
+
+                                    {isRenaming ? (
+                                      <span className="wechatTreeRow__label" style={{ width: '100%' }}>
+                                        <input
+                                          ref={fsInlineInputRef}
+                                          className="wechatTreeInlineInput"
+                                          defaultValue={fsInlineAction?.initialName || e.name}
+                                          onKeyDown={async (ev) => {
+                                            if (ev.key === 'Escape') {
+                                              ev.preventDefault()
+                                              setFsInlineAction(null)
+                                            }
+                                            if (ev.key === 'Enter') {
+                                              ev.preventDefault()
+                                              const v = (ev.currentTarget.value || '').trim()
+                                              if (!v) return
+                                              await handleFilesRenamePathInline(e.relPath, v)
+                                              setFsInlineAction(null)
+                                            }
+                                          }}
+                                        />
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="wechatTreeRow__label"
+                                        onClick={() => {
+                                          setFsSelectedRel(e.relPath)
+                                          if (isDir) toggleDir(e.relPath)
+                                          else openDiskFile(e.relPath)
+                                        }}
+                                        title={e.relPath}
+                                      >
+                                        <span className="wechatTreeRow__name">{e.name}</span>
+                                        {!isDir && (
+                                          <span className="wechatTreeRow__ext">
+                                            {e.kind}
+                                            {isActive && isActiveFileDirty ? <strong className="wechatDirtyDot"> ●</strong> : null}
+                                          </span>
+                                        )}
+                                      </button>
+                                    )}
+
+                                    {!isRenaming && (
+                                      <div className="wechatTreeRow__actions" aria-label="文件操作">
+                                        <button
+                                          type="button"
+                                          className="wechatMiniBtn"
+                                          onClick={() => setFsInlineAction({ type: 'rename', targetRel: e.relPath, initialName: e.name })}
+                                          title="F2"
+                                        >
+                                          重命名
+                                        </button>
+                                        <button type="button" className="wechatMiniBtn" onClick={() => handleFilesDeletePath(e.relPath)}>
+                                          删除
+                                        </button>
+                                        {isDir && (
+                                          <>
+                                            <button
+                                              type="button"
+                                              className="wechatMiniBtn"
+                                              onClick={() => {
+                                                setFsExpanded((prev) => new Set(prev).add(e.relPath))
+                                                setFsInlineAction({ type: 'newFile', targetRel: e.relPath })
+                                              }}
+                                              title="在此文件夹新建文件"
+                                            >
+                                              ＋F
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="wechatMiniBtn"
+                                              onClick={() => {
+                                                setFsExpanded((prev) => new Set(prev).add(e.relPath))
+                                                setFsInlineAction({ type: 'newFolder', targetRel: e.relPath })
+                                              }}
+                                              title="在此文件夹新建文件夹"
+                                            >
+                                              ＋D
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {isDir && isOpen && renderDir(e.relPath, depth + 1)}
+                                </React.Fragment>
+                              )
+                            })}
+                          </div>
+                        )
+                      }
+
+                      // Root
+                      return (
+                        <>
+                          <div
+                            className={`wechatTreeRow wechatTreeRow--root ${fsSelectedRel === '' ? 'is-selected' : ''}`}
+                            style={{ paddingLeft: 10 }}
+                            onContextMenu={(e) => {
+                              e.preventDefault()
+                              setFsSelectedRel('')
+                              setFsContextMenu({ x: e.clientX, y: e.clientY, rel: '', isDir: true })
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault()
+                            }}
+                            onDrop={async (e) => {
+                              e.preventDefault()
+                              const fromRel = e.dataTransfer.getData('text/wce-rel')
+                              const fromIsDir = e.dataTransfer.getData('text/wce-isdir') === '1'
+                              if (!fromRel) return
+                              if (fromIsDir && isRelDescendantOrSame(fromRel, '')) return
+                              await handleFilesMovePath(fromRel, '')
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="wechatTreeRow__twisty"
+                              onClick={async () => {
+                                await toggleDir('')
+                              }}
+                              title={fsExpanded.has('') ? '折叠' : '展开'}
+                            >
+                              {fsExpanded.has('') ? '▾' : '▸'}
+                            </button>
+                            <button type="button" className="wechatTreeRow__label" onClick={async () => ensureDirLoaded('')}>
+                              <span className="wechatTreeRow__name">（根目录）</span>
+                              {fsLoading && <span className="wechatTreeRow__ext">读取中…</span>}
+                            </button>
+                            <div className="wechatTreeRow__actions" aria-label="根目录操作">
+                              <button
+                                type="button"
+                                className="wechatMiniBtn"
+                                onClick={() => {
+                                  setFsExpanded((prev) => new Set(prev).add(''))
+                                  setFsInlineAction({ type: 'newFile', targetRel: '' })
+                                }}
+                              >
+                                ＋F
+                              </button>
+                              <button
+                                type="button"
+                                className="wechatMiniBtn"
+                                onClick={() => {
+                                  setFsExpanded((prev) => new Set(prev).add(''))
+                                  setFsInlineAction({ type: 'newFolder', targetRel: '' })
+                                }}
+                              >
+                                ＋D
+                              </button>
+                            </div>
+                          </div>
+                          {fsExpanded.has('') && renderDir('', 1)}
+                        </>
+                      )
+                    })()}
+
+                    {fsContextMenu && (
+                      <div className="wechatCtxMenu__backdrop" onMouseDown={() => closeFsContextMenu()}>
+                        <div
+                          className="wechatCtxMenu"
+                          style={{ left: fsContextMenu.x, top: fsContextMenu.y }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            className="wechatCtxMenu__item"
+                            onClick={() => {
+                              const rel = fsContextMenu.rel
+                              const isDir = fsContextMenu.isDir
+                              closeFsContextMenu()
+                              if (isDir) toggleDir(rel)
+                              else openDiskFile(rel)
+                            }}
+                          >
+                            {fsContextMenu.isDir ? '展开/折叠' : '打开'}
+                          </button>
+
+                          <button
+                            type="button"
+                            className="wechatCtxMenu__item"
+                            onClick={() => {
+                              const rel = fsContextMenu.rel
+                              const dir = fsContextMenu.isDir ? rel : relDirOf(rel)
+                              closeFsContextMenu()
+                              setFsExpanded((prev) => new Set(prev).add(dir))
+                              setFsInlineAction({ type: 'newFile', targetRel: dir })
+                            }}
+                          >
+                            新建文件
+                          </button>
+
+                          <button
+                            type="button"
+                            className="wechatCtxMenu__item"
+                            onClick={() => {
+                              const rel = fsContextMenu.rel
+                              const dir = fsContextMenu.isDir ? rel : relDirOf(rel)
+                              closeFsContextMenu()
+                              setFsExpanded((prev) => new Set(prev).add(dir))
+                              setFsInlineAction({ type: 'newFolder', targetRel: dir })
+                            }}
+                          >
+                            新建文件夹
+                          </button>
+
+                          {fsContextMenu.rel ? (
+                            <>
+                              <button
+                                type="button"
+                                className="wechatCtxMenu__item"
+                                onClick={() => {
+                                  const rel = fsContextMenu.rel
+                                  closeFsContextMenu()
+                                  setFsInlineAction({ type: 'rename', targetRel: rel, initialName: relBaseName(rel) })
+                                }}
+                              >
+                                重命名（F2）
+                              </button>
+
+                              <button
+                                type="button"
+                                className="wechatCtxMenu__item wechatCtxMenu__item--danger"
+                                onClick={async () => {
+                                  const rel = fsContextMenu.rel
+                                  closeFsContextMenu()
+                                  await handleFilesDeletePath(rel)
+                                }}
+                              >
+                                删除
+                              </button>
+                            </>
+                          ) : null}
+
+                          <div className="wechatCtxMenu__sep" />
+
+                          <button
+                            type="button"
+                            className="wechatCtxMenu__item"
+                            onClick={async () => {
+                              const rel = fsContextMenu.rel
+                              closeFsContextMenu()
+                              await copyToClipboard(rel)
+                            }}
+                          >
+                            复制相对路径
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </aside>
+          </div>
         </aside>
 
         <section className="wechatPanel">
@@ -2111,6 +4130,45 @@ export default function WeChatEditor() {
             >
               S
             </ToolbarButton>
+
+            <div className="tbColor" title="文字颜色">
+              <input
+                className="tbColor__picker"
+                type="color"
+                value={textColorHex}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setTextColorHex(next)
+                  setTextColorInput(next)
+                  applyTextColor(next)
+                }}
+              />
+              <input
+                className="tbColor__input"
+                value={textColorInput}
+                placeholder="#RRGGBB"
+                onChange={(e) => setTextColorInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    applyTextColor(textColorInput)
+                  }
+                }}
+                onBlur={() => {
+                  const hex = normalizeColorToHex(textColorInput)
+                  if (hex) {
+                    setTextColorHex(hex)
+                    setTextColorInput(hex)
+                    applyTextColor(hex)
+                  }
+                }}
+              />
+              <ToolbarButton label="清除文字颜色" onClick={() => editor?.chain().focus().unsetColor().run()}>
+                清色
+              </ToolbarButton>
+            </div>
+
+            {renderTextColorPalette((c) => applyTextColor(c))}
 
             <div className="sep" />
 
@@ -2198,6 +4256,23 @@ export default function WeChatEditor() {
             <ToolbarButton label="本地图片" onClick={handlePickLocalImage}>
               上传
             </ToolbarButton>
+
+            <select
+              className="tbSelect"
+              value={imageStyle}
+              onChange={(e) => applySelectedImageStyle(e.target.value as ImageStyleId)}
+              title="图片样式（先选中图片）"
+              aria-label="图片样式"
+            >
+              {IMAGE_STYLE_OPTIONS.map((o) => (
+                <option key={o.id || 'default'} value={o.id}>
+                  图片：{o.label}
+                </option>
+              ))}
+            </select>
+            <ToolbarButton label="清除图片样式" onClick={() => applySelectedImageStyle('')}>
+              清样式
+            </ToolbarButton>
             <input
               ref={fileInputRef}
               type="file"
@@ -2220,6 +4295,49 @@ export default function WeChatEditor() {
             >
               清格式
             </ToolbarButton>
+            </div>
+          )}
+
+          {editorFormat === 'markdown' && (
+            <div className="wechatToolbar">
+              <div className="tbColor" title="文字颜色（Markdown 源码：会插入 HTML span）">
+                <input
+                  className="tbColor__picker"
+                  type="color"
+                  value={textColorHex}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setTextColorHex(next)
+                    setTextColorInput(next)
+                    applyMarkdownTextColor(next)
+                  }}
+                />
+                <input
+                  className="tbColor__input"
+                  value={textColorInput}
+                  placeholder="#RRGGBB"
+                  onChange={(e) => setTextColorInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applyMarkdownTextColor(textColorInput)
+                    }
+                  }}
+                  onBlur={() => {
+                    const hex = normalizeColorToHex(textColorInput)
+                    if (hex) {
+                      setTextColorHex(hex)
+                      setTextColorInput(hex)
+                      applyMarkdownTextColor(hex)
+                    }
+                  }}
+                />
+                <ToolbarButton label="清除文字颜色（移除 span）" onClick={clearMarkdownTextColor}>
+                  清色
+                </ToolbarButton>
+              </div>
+
+              {renderTextColorPalette((c) => applyMarkdownTextColor(c))}
             </div>
           )}
 
@@ -2380,17 +4498,17 @@ export default function WeChatEditor() {
         </div>
       )}
 
-      {isComponentConfigOpen && componentConfigTarget?.config && (
+      {isComponentConfigOpen && componentConfigTarget && getComponentSchema(componentConfigTarget) && (
         <div className="modalOverlay" role="dialog" aria-modal="true">
           <div className="modal">
             <div className="modal__title">
-              {componentConfigTarget.config.title ?? `插入组件：${componentConfigTarget.name}`}
+              {getComponentSchema(componentConfigTarget)!.title ?? `插入组件：${componentConfigTarget.name}`}
             </div>
             <div className="modal__desc">
-              {componentConfigTarget.config.desc ?? '调整参数后点击“插入”。参数会自动记住下次使用。'}
+              {getComponentSchema(componentConfigTarget)!.desc ?? '调整参数后点击“插入”。参数会自动记住下次使用。'}
             </div>
 
-            {componentConfigTarget.config.fields.map((f) => (
+            {getComponentSchema(componentConfigTarget)!.fields.map((f) => (
               <label key={f.key} className="modal__field">
                 <div className="modal__label">{f.label}</div>
                 {f.type === 'select' ? (

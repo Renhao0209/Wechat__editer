@@ -14,4 +14,16 @@ contextBridge.exposeInMainWorld('desktop', {
       return () => ipcRenderer.removeListener('updater:status', listener)
     },
   },
+  fs: {
+    pickFolder: () => ipcRenderer.invoke('fs:pickFolder'),
+    listDir: (params) => ipcRenderer.invoke('fs:listDir', params),
+    readTextFile: (params) => ipcRenderer.invoke('fs:readTextFile', params),
+    writeTextFile: (params) => ipcRenderer.invoke('fs:writeTextFile', params),
+    saveAs: (params) => ipcRenderer.invoke('fs:saveAs', params),
+    rename: (params) => ipcRenderer.invoke('fs:rename', params),
+    deleteFile: (params) => ipcRenderer.invoke('fs:deleteFile', params),
+    mkdir: (params) => ipcRenderer.invoke('fs:mkdir', params),
+    movePath: (params) => ipcRenderer.invoke('fs:movePath', params),
+    deletePath: (params) => ipcRenderer.invoke('fs:deletePath', params),
+  },
 })

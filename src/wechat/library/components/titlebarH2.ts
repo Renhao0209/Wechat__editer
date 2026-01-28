@@ -8,16 +8,27 @@ import {
   toneField,
 } from '../componentConfigHelpers'
 
+const schema = buildConfig('插入：标题条（H2）', undefined, [
+  { key: 'text', label: '标题', type: 'text', role: 'content', default: '章节标题' },
+  toneField('theme'),
+])
+
 const component = {
   id: 'titlebarH2',
   name: '标题条（H2）',
   desc: '适合章节开头',
   category: '标题',
 
-  config: buildConfig('插入：标题条（H2）', undefined, [
-    { key: 'text', label: '标题', type: 'text', default: '章节标题' },
-    toneField('theme'),
-  ]),
+  schemaVersion: 1,
+  tags: ['titlebar', '标题条', '章节'],
+
+  defaultProps: {
+    text: '章节标题',
+    tone: 'theme',
+  },
+
+  propSchema: schema,
+  config: schema,
 
   render: (values: Record<string, string>) => {
     const cls = toneClass(values)

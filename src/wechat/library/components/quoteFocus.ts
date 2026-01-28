@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'quoteFocus',
@@ -21,7 +28,10 @@ const component = {
     const cls = toneClass(values)
     const text = escapeHtml((values.text || '').trim()) || '“一句话金句/观点，适合在段落之间做强调。”'
     const className = ['quote', cls].filter(Boolean).join(' ')
-    return { html: `<blockquote class="${className}"><p>${text}</p></blockquote><p></p>` }
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+    return {
+      html: `<blockquote class="${className}" data-wce-component="quoteFocus" data-wce-props="${propsRaw}"><p>${text}</p></blockquote><p></p>`,
+    }
   },
 } satisfies BuiltInComponentDef
 

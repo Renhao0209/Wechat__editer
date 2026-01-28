@@ -120,6 +120,16 @@ export function getWeChatBaseCss(): string {
   background: var(--wechat-quote-bg);
 }
 
+/* Neutral wrapper for multi-block components (so they stay a single selectable unit). */
+.wechat-article blockquote.wce-wrap {
+  padding: 0;
+  border-left: 0;
+  background: transparent;
+}
+
+.wechat-article blockquote.wce-wrap > :first-child { margin-top: 0; }
+.wechat-article blockquote.wce-wrap > :last-child { margin-bottom: 0; }
+
 .wechat-article ul,
 .wechat-article ol {
   margin: 12px 0 12px 24px;
@@ -210,6 +220,25 @@ export function getWeChatBaseCss(): string {
   display: block;
   margin: 10px auto;
   border-radius: 8px;
+}
+
+.wechat-article img.wce-img--rounded {
+  border-radius: 14px;
+}
+
+.wechat-article img.wce-img--shadow {
+  border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.16);
+}
+
+.wechat-article img.wce-img--border {
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.10);
+}
+
+.wechat-article img.wce-img--circle {
+  border-radius: 999px;
 }
 
 .wechat-article code {
