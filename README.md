@@ -12,12 +12,14 @@
 
 - [特性](#特性)
 - [更新公告](#更新公告)
+- [桌面版下载（Windows）](#桌面版下载windows)
 - [快速开始](#快速开始)
 - [推荐工作流（更贴近公众号后台）](#推荐工作流更贴近公众号后台)
 - [自定义主题导入](#自定义主题导入)
 - [项目结构](#项目结构)
 - [参与贡献](#参与贡献)
 - [版本与发布（最小策略）](#版本与发布最小策略)
+- [发布 Windows 安装包到 Release](#发布-windows-安装包到-release)
 - [FAQ](#faq)
 - [Roadmap](#roadmap)
 
@@ -34,6 +36,14 @@
 
 - `v0.1.0`（2026-01-28）：新增“富文本 / Markdown 源码”切换、编辑区↔预览区双向滚动同步（含回滚/抖动修复）、滚动条视觉优化、可滚动框组件隐藏滚动条。
 - 完整记录见 [CHANGELOG.md](CHANGELOG.md)
+
+## 桌面版下载（Windows）
+
+到 GitHub Releases 下载最新安装包（`.exe`）：
+
+- https://github.com/Renhao0209/Wechat__editer/releases
+
+说明：通常文件名类似 `微信排版助手 Setup x.y.z.exe`。
 
 ## 快速开始
 
@@ -69,6 +79,21 @@ npm run preview
 3. 等待 Actions 完成后，会在该 Issue 评论区给出 ZIP 下载链接
 
 说明：会同步一份到 Release（`nightly`）作为公网直链（仓库公开时免登录），同时保留 Actions artifact 备选链接。
+
+## 发布 Windows 安装包到 Release
+
+仓库已配置工作流：推送 Tag 后自动在 GitHub Release 上传 Windows 安装包。
+
+1. 更新版本号（`package.json`）与变更记录（[CHANGELOG.md](CHANGELOG.md)）
+2. 创建并推送 tag（遵循 SemVer）：
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+3. 等待 Actions 工作流 `Release Desktop (Windows)` 完成
+4. 去 Releases 页面下载： https://github.com/Renhao0209/Wechat__editer/releases
 
 ## 推荐工作流（更贴近公众号后台）
 

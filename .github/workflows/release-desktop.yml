@@ -1,0 +1,51 @@
+name: Release Desktop (Windows)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  win:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build + Package (NSIS)
+        env:
+          # Avoid CI failing due to missing code signing cert.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run build:desktop
+
+      - name: Remove uninstaller artifact (keep installer only)
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path release -Filter '*__uninstaller*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+
+      - name: Publish to GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generateReleaseNotes: true
+          artifacts: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+            release/*.yml

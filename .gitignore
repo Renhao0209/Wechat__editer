@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Desktop packaging output
+release/
+
+# Local packaging cache (optional)
+.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
