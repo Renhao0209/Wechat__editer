@@ -943,6 +943,8 @@
   display: grid;
   place-items: center;
   padding: 14px;
+  z-index: 1000;
+  isolation: isolate;
 }
 
 .modal {
