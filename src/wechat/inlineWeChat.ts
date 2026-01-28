@@ -8,6 +8,10 @@ type InlineParams = {
   customTheme?: WeChatCustomTheme
 }
 
+type ComputedInlineParams = InlineParams & {
+  cssText: string
+}
+
 function styleToString(style: Record<string, string | undefined>): string {
   return Object.entries(style)
     .filter(([, v]) => v && v.trim().length > 0)
@@ -79,7 +83,7 @@ function themeVars(theme: WeChatThemeId, customTheme?: WeChatCustomTheme) {
 export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
   const vars = themeVars(params.theme, params.customTheme)
   const doc = new DOMParser().parseFromString(
-    `<article data-theme="${params.theme}">${params.bodyHtml}</article>`,
+    `<section data-theme="${params.theme}">${params.bodyHtml}</section>`,
     'text/html',
   )
   const article = doc.body.firstElementChild as HTMLElement | null
@@ -303,6 +307,27 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
         margin: '10px auto',
         'border-radius': '8px',
       })
+
+      // Image style variants (these classes may be stripped on paste, so inline them).
+      if (el.classList.contains('wce-img--rounded')) {
+        setStyle(el, { 'border-radius': '14px' })
+      }
+      if (el.classList.contains('wce-img--shadow')) {
+        setStyle(el, {
+          'border-radius': '12px',
+          'box-shadow': '0 14px 34px rgba(0,0,0,0.16)',
+        })
+      }
+      if (el.classList.contains('wce-img--border')) {
+        setStyle(el, {
+          'border-radius': '12px',
+          border: '1px solid rgba(0,0,0,0.14)',
+          'box-shadow': '0 10px 22px rgba(0,0,0,0.10)',
+        })
+      }
+      if (el.classList.contains('wce-img--circle')) {
+        setStyle(el, { 'border-radius': '999px' })
+      }
     }
 
     if (tag === 'code') {
@@ -386,4 +411,173 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
 
   // Return outerHTML of article only, suitable for WeChat backend.
   return article.outerHTML
+}
+
+function stripRiskyAttributes(root: HTMLElement) {
+  const allowed = new Set(['style', 'href', 'src', 'alt', 'title', 'target', 'rel'])
+  const all = [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))]
+  for (const el of all) {
+    const attrs = Array.from(el.attributes)
+    for (const attr of attrs) {
+      const name = attr.name.toLowerCase()
+      if (allowed.has(name)) continue
+      // WeChat backend often strips/normalizes attributes; keep output conservative.
+      el.removeAttribute(attr.name)
+    }
+  }
+}
+
+/**
+ * Ultra compatible HTML fragment for WeChat backend paste.
+ * - Downgrade headings to <p> so inline styles are more likely preserved.
+ * - Strip non-essential attributes (class/data-*) to avoid aggressive sanitizers.
+ */
+export function buildUltraInlinedWeChatArticleHtml(params: InlineParams): string {
+  const inlined = buildInlinedWeChatArticleHtml(params)
+  const doc = new DOMParser().parseFromString(inlined, 'text/html')
+  const root = doc.body.firstElementChild as HTMLElement | null
+  if (!root) return inlined
+
+  const headings = Array.from(root.querySelectorAll<HTMLElement>('h1,h2,h3'))
+  for (const h of headings) {
+    const p = doc.createElement('p')
+    const style = h.getAttribute('style')
+    if (style) p.setAttribute('style', style)
+    p.innerHTML = h.innerHTML
+    h.replaceWith(p)
+  }
+
+  stripRiskyAttributes(root)
+  return root.outerHTML
+}
+
+const COMPUTED_STYLE_PROPS = [
+  'color',
+  'background',
+  'background-color',
+  'background-image',
+  'background-repeat',
+  'background-position',
+  'background-size',
+  'background-clip',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'text-decoration-line',
+  'line-height',
+  'text-align',
+  'letter-spacing',
+  'word-break',
+  'white-space',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'margin-left',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'border-top-width',
+  'border-top-style',
+  'border-top-color',
+  'border-right-width',
+  'border-right-style',
+  'border-right-color',
+  'border-bottom-width',
+  'border-bottom-style',
+  'border-bottom-color',
+  'border-left-width',
+  'border-left-style',
+  'border-left-color',
+  'border-radius',
+  'box-shadow',
+  'display',
+  'max-width',
+  'height',
+  'overflow',
+  'overflow-x',
+  'overflow-y',
+] as const
+
+function inlineComputedStyles(root: HTMLElement) {
+  const all = [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))]
+  for (const el of all) {
+    const cs = window.getComputedStyle(el)
+    const style: Record<string, string> = {}
+    for (const prop of COMPUTED_STYLE_PROPS) {
+      const v = cs.getPropertyValue(prop)
+      if (!v) continue
+      const trimmed = v.trim()
+      if (!trimmed) continue
+      // Avoid bloating with fully-transparent defaults.
+      if ((prop === 'background-color' || prop === 'box-shadow') && trimmed === 'rgba(0, 0, 0, 0)') continue
+      style[prop] = trimmed
+    }
+
+    const next = styleToString(style)
+    if (next.length > 0) el.setAttribute('style', next)
+    else el.removeAttribute('style')
+  }
+}
+
+/**
+ * Best-effort fidelity mode: render with our CSS, then inline computed styles.
+ * This usually matches the preview more closely than hand-written inlining.
+ */
+export function buildComputedInlinedWeChatArticleHtml(params: ComputedInlineParams): string {
+  // Hidden host to compute styles.
+  const host = document.createElement('div')
+  host.style.position = 'fixed'
+  host.style.left = '-9999px'
+  host.style.top = '0'
+  host.style.width = '420px'
+  host.style.padding = '0'
+  host.style.margin = '0'
+  host.style.pointerEvents = 'none'
+  host.style.opacity = '0'
+
+  const styleEl = document.createElement('style')
+  styleEl.textContent = params.cssText
+
+  const root = document.createElement('section')
+  root.setAttribute('data-theme', params.theme)
+  root.className = 'wechat-article'
+  root.innerHTML = params.bodyHtml
+
+  host.appendChild(styleEl)
+  host.appendChild(root)
+  document.body.appendChild(host)
+
+  try {
+    inlineComputedStyles(root)
+
+    // Avoid top clipping in containers that crop the first element.
+    // A tiny non-empty spacer is more reliable than tweaking margins.
+    setStyle(root, { overflow: 'visible', 'padding-top': '6px' })
+    const spacer = document.createElement('p')
+    spacer.setAttribute('style', 'margin:0;line-height:12px;')
+    spacer.innerHTML = '<br>'
+    root.insertBefore(spacer, root.firstChild)
+
+    // Pseudo-elements like h2.section::before won't be preserved in pasted HTML.
+    // Convert it into a real border-left so the visual accent survives.
+    const sectionHeadings = Array.from(root.querySelectorAll<HTMLElement>('h2.section'))
+    for (const h2 of sectionHeadings) {
+      const before = window.getComputedStyle(h2, '::before')
+      const accent = (before.getPropertyValue('background-color') || '').trim()
+      const width = (before.getPropertyValue('width') || '').trim() || '4px'
+      if (accent && accent !== 'rgba(0, 0, 0, 0)') {
+        setStyle(h2, {
+          'border-left-width': width,
+          'border-left-style': 'solid',
+          'border-left-color': accent,
+        })
+      }
+    }
+
+    stripRiskyAttributes(root)
+    return root.outerHTML
+  } finally {
+    document.body.removeChild(host)
+  }
 }

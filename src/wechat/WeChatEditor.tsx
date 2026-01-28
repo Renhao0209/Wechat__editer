@@ -23,7 +23,11 @@ import { COMPONENTS } from './library/components'
 import type { ComponentCategory, ComponentConfigSchema, ComponentItem } from './library/types'
 import { LAYOUT_PRESETS } from './library/layoutPresets'
 import { TEMPLATES } from './library/templates'
-import { buildInlinedWeChatArticleHtml } from './inlineWeChat'
+import {
+  buildComputedInlinedWeChatArticleHtml,
+  buildInlinedWeChatArticleHtml,
+  buildUltraInlinedWeChatArticleHtml,
+} from './inlineWeChat'
 import { decodeComponentProps, encodeComponentProps, escapeHtml, escapeHtmlAttr, toneClass } from './library/componentConfigHelpers'
 import { BlockquoteWithClass } from './extensions/blockquoteWithClass'
 import { ParagraphWithClass } from './extensions/paragraphWithClass'
@@ -177,6 +181,8 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 async function copyHtmlToClipboard(params: { html: string; plainText?: string }): Promise<boolean> {
   try {
+    const plain = params.plainText ?? htmlToPlainText(params.html)
+
     // Prefer rich clipboard so pasting keeps formatting.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ClipboardItemAny = (window as any).ClipboardItem as
@@ -186,12 +192,63 @@ async function copyHtmlToClipboard(params: { html: string; plainText?: string })
     if (ClipboardItemAny && navigator.clipboard.write) {
       const item = new ClipboardItemAny({
         'text/html': new Blob([params.html], { type: 'text/html' }),
-        'text/plain': new Blob([params.plainText ?? htmlToPlainText(params.html)], {
+        'text/plain': new Blob([plain], {
           type: 'text/plain',
         }),
       })
       await navigator.clipboard.write([item])
       return true
+    }
+
+    // Fallback: execCommand copy, but inject the copy payload so we don't silently end up with plain text.
+    try {
+      const host = document.createElement('div')
+      host.contentEditable = 'true'
+      host.setAttribute('contenteditable', 'true')
+      host.style.position = 'fixed'
+      host.style.left = '-9999px'
+      host.style.top = '0'
+      host.style.width = '1px'
+      host.style.height = '1px'
+      host.style.opacity = '0'
+      host.style.pointerEvents = 'none'
+      host.innerHTML = params.html
+
+      let injected = false
+      const onCopy = (e: ClipboardEvent) => {
+        const dt = e.clipboardData
+        if (!dt) return
+        try {
+          dt.setData('text/html', params.html)
+          dt.setData('text/plain', plain)
+          injected = true
+          e.preventDefault()
+        } catch {
+          // ignore
+        }
+      }
+
+      host.addEventListener('copy', onCopy)
+      document.body.appendChild(host)
+
+      const sel = window.getSelection()
+      if (sel) {
+        sel.removeAllRanges()
+        const range = document.createRange()
+        range.selectNodeContents(host)
+        sel.addRange(range)
+      }
+
+      const okLegacy = document.execCommand('copy')
+
+      const sel2 = window.getSelection()
+      sel2?.removeAllRanges()
+      host.removeEventListener('copy', onCopy)
+      document.body.removeChild(host)
+
+      if (okLegacy && injected) return true
+    } catch {
+      // ignore
     }
 
     return await copyToClipboard(params.html)
@@ -1117,6 +1174,10 @@ export default function WeChatEditor() {
     return buildInlinedWeChatArticleHtml({ bodyHtml: previewHtml, theme, customTheme: selectedCustomTheme })
   }, [previewHtml, selectedCustomTheme, theme])
 
+  const exportUltraInlinedArticleHtml = useMemo(() => {
+    return buildUltraInlinedWeChatArticleHtml({ bodyHtml: previewHtml, theme, customTheme: selectedCustomTheme })
+  }, [previewHtml, selectedCustomTheme, theme])
+
   const previewScopedCss = useMemo(() => {
     const scopedRoot = exportCss.replaceAll(':root', '.wechatPreviewScope')
     return scopedRoot.replaceAll('.wechat-article', '.wechatPreviewScope .wechat-article')
@@ -1980,13 +2041,29 @@ export default function WeChatEditor() {
   }
 
   async function handleCopyRich() {
-    const ok = await copyHtmlToClipboard({ html: exportClipboardHtml })
-    flash(ok ? '已复制：富文本（可直接粘贴）' : '复制失败：可能被浏览器限制')
+    const html = buildComputedInlinedWeChatArticleHtml({
+      bodyHtml: previewHtml,
+      theme,
+      customTheme: selectedCustomTheme,
+      cssText: exportCss,
+    })
+    const ok = await copyHtmlToClipboard({ html })
+    flash(ok ? '已复制：公众号粘贴版（全量内联）' : '复制失败：可能被浏览器限制')
   }
 
   async function handleCopyInlinedHtml() {
     const ok = await copyHtmlToClipboard({ html: exportInlinedArticleHtml })
-    flash(ok ? '已复制：内联 HTML（更稳）' : '复制失败：可能被浏览器限制')
+    flash(ok ? '已复制：公众号粘贴版（标准内联）' : '复制失败：可能被浏览器限制')
+  }
+
+  async function handleCopyUltraInlinedHtml() {
+    const ok = await copyHtmlToClipboard({ html: exportUltraInlinedArticleHtml })
+    flash(ok ? '已复制：公众号粘贴版（极限兼容）' : '复制失败：可能被浏览器限制')
+  }
+
+  async function handleCopyRichWithStyleTag() {
+    const ok = await copyHtmlToClipboard({ html: exportClipboardHtml })
+    flash(ok ? '已复制：富文本（含 style，可能被公众号过滤）' : '复制失败：可能被浏览器限制')
   }
 
   function handleDownloadInlinedHtml() {
@@ -3033,7 +3110,7 @@ export default function WeChatEditor() {
                     void handleCopyRich()
                   }}
                 >
-                  复制富文本
+                  复制到公众号
                 </button>
                 <button
                   className="btn btn--ghost"
@@ -3042,7 +3119,7 @@ export default function WeChatEditor() {
                     void handleCopyInlinedHtml()
                   }}
                 >
-                  复制内联HTML
+                  复制到公众号（标准）
                 </button>
               </div>
 
@@ -3064,6 +3141,30 @@ export default function WeChatEditor() {
                   </button>
 
                   <div className="menu__sep" />
+
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      void handleCopyUltraInlinedHtml()
+                    }}
+                  >
+                    复制到公众号（极限兼容）
+                  </button>
+
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      void handleCopyRichWithStyleTag()
+                    }}
+                  >
+                    复制富文本（含style）
+                  </button>
 
                   <button
                     type="button"
