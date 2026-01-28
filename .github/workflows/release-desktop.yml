@@ -110,13 +110,44 @@ jobs:
               await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: asset.id });
             }
 
+      - name: Generate release notes from CHANGELOG
+        id: changelog
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          if (-not $tag) { throw 'RELEASE_TAG is empty.' }
+
+          $version = $tag
+          if ($version.StartsWith('v')) { $version = $version.Substring(1) }
+
+          if (-not (Test-Path 'CHANGELOG.md')) {
+            throw 'CHANGELOG.md not found at repo root.'
+          }
+
+          $changelog = Get-Content -Path 'CHANGELOG.md' -Raw
+          $escaped = [regex]::Escape($version)
+          $pattern = "(?ms)^## \\[$escaped\\].*?(?=^## \\[|\\z)"
+          $m = [regex]::Match($changelog, $pattern)
+
+          if (-not $m.Success) {
+            throw "Changelog section for version '$version' not found (expected heading like: ## [$version] - YYYY-MM-DD)."
+          }
+
+          $notes = "## 更新日志`n`n" + $m.Value.Trim() + "`n"
+          Set-Content -Path 'release-notes.md' -Value $notes -Encoding utf8
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Publish to GitHub Release
         uses: ncipollo/release-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TAG }}
-          generateReleaseNotes: true
+          name: WeChat Editor v${{ steps.changelog.outputs.version }}
+          bodyFile: release-notes.md
+          generateReleaseNotes: false
           allowUpdates: true
           replacesArtifacts: true
           artifactErrorsFailBuild: true
