@@ -43,7 +43,11 @@ jobs:
         env:
           # Avoid CI failing due to missing code signing cert.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run build:desktop
+          # Prevent electron-builder from trying to auto-publish (it requires GH_TOKEN).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm run build
+          npx electron-builder --publish never
 
       - name: Verify packaging outputs
         shell: pwsh
