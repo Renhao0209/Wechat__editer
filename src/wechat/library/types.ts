@@ -6,7 +6,7 @@ export type TemplateItem = {
 
 export type ComponentCategory = '标题' | '卡片' | '引用' | '分隔' | '分割线' | '清单' | '图片'
 
-export type ComponentConfigFieldType = 'text' | 'color' | 'select'
+export type ComponentConfigFieldType = 'text' | 'textarea' | 'color' | 'select'
 
 export type ComponentConfigField = {
   key: string

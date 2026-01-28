@@ -1,10 +1,17 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
+import { buildConfig, toneClass, toneField } from '../componentConfigHelpers'
 
 const component = {
   id: 'dividerLine',
   name: '分隔线（虚线）',
   category: '分隔',
-  html: `<hr /><p></p>`,
+
+  config: buildConfig('插入：分隔线（虚线）', undefined, [toneField('theme')]),
+
+  render: (values: Record<string, string>) => {
+    const cls = toneClass(values)
+    return { html: `<hr class="${cls}" /><p></p>` }
+  },
 } satisfies BuiltInComponentDef
 
 export default component

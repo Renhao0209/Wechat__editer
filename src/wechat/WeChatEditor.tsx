@@ -26,6 +26,9 @@ import { BlockquoteWithClass } from './extensions/blockquoteWithClass'
 import { ParagraphWithClass } from './extensions/paragraphWithClass'
 import { HeadingWithClass } from './extensions/headingWithClass'
 import { ScrollBox } from './extensions/scrollBox'
+import { BulletListWithClass } from './extensions/bulletListWithClass'
+import { OrderedListWithClass } from './extensions/orderedListWithClass'
+import { HorizontalRuleWithClass } from './extensions/horizontalRuleWithClass'
 import './wechatEditor.css'
 
 const STORAGE_KEY = 'wechatedit:html'
@@ -296,10 +299,16 @@ export default function WeChatEditor() {
         heading: false,
         paragraph: false,
         blockquote: false,
+        bulletList: false,
+        orderedList: false,
+        horizontalRule: false,
       }),
       HeadingWithClass.configure({ levels: [1, 2, 3] }),
       ParagraphWithClass,
       BlockquoteWithClass,
+      BulletListWithClass,
+      OrderedListWithClass,
+      HorizontalRuleWithClass,
       ScrollBox,
       Underline,
       TextStyle,
@@ -1449,6 +1458,15 @@ export default function WeChatEditor() {
                     className="modal__input"
                     type="color"
                     value={componentConfigValues[f.key] ?? f.default ?? '#000000'}
+                    onChange={(e) =>
+                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                    }
+                  />
+                ) : f.type === 'textarea' ? (
+                  <textarea
+                    className="modal__textarea"
+                    value={componentConfigValues[f.key] ?? ''}
+                    placeholder={f.placeholder}
                     onChange={(e) =>
                       setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
                     }

@@ -375,6 +375,9 @@
   color: #111;
   font-size: 15px;
   line-height: 1.8;
+  --wechat-accent: rgba(11, 87, 208, 0.95);
+  --wechat-accent-soft: rgba(11, 87, 208, 0.10);
+  --wechat-accent-softer: rgba(11, 87, 208, 0.06);
 }
 
 .wechatEditor__prose p {
@@ -398,17 +401,17 @@
 .wechatEditor__prose h2.titlebar {
   padding: 10px 12px;
   border-radius: 14px;
-  background: rgba(11, 87, 208, 0.10);
+  background: linear-gradient(90deg, var(--wechat-accent-soft), transparent);
   border: 1px solid rgba(0, 0, 0, 0.08);
-  border-left: 4px solid rgba(11, 87, 208, 0.95);
+  border-left: 4px solid var(--wechat-accent);
 }
 
 .wechatEditor__prose h3.badge {
   display: inline-block;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(11, 87, 208, 0.08);
-  border: 1px solid rgba(11, 87, 208, 0.18);
+  background: var(--wechat-accent-softer);
+  border: 1px solid rgba(0, 0, 0, 0.10);
 }
 
 .wechatEditor__prose blockquote.card,
@@ -416,12 +419,39 @@
   border-left: none;
   border-radius: 14px;
   border: 1px solid rgba(0, 0, 0, 0.10);
-  background: rgba(11, 87, 208, 0.06);
+  background: var(--wechat-accent-softer);
 }
 
 .wechatEditor__prose blockquote.guide {
-  background: rgba(11, 87, 208, 0.08);
-  border-left: 4px solid rgba(11, 87, 208, 0.90);
+  background: var(--wechat-accent-soft);
+  border-left: 4px solid var(--wechat-accent);
+}
+
+.wechatEditor__prose blockquote.callout {
+  margin: 14px 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.wechatEditor__prose blockquote.callout.tone {
+  background: var(--wechat-accent-soft);
+  border-color: var(--wechat-accent);
+}
+
+.wechatEditor__prose blockquote.callout--info {
+  background: rgba(11, 87, 208, 0.06);
+  border-color: rgba(11, 87, 208, 0.22);
+}
+
+.wechatEditor__prose blockquote.callout--warn {
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.wechatEditor__prose blockquote.callout--ok {
+  background: rgba(34, 197, 94, 0.10);
+  border-color: rgba(34, 197, 94, 0.28);
 }
 
 .wechatEditor__prose p.card__title,
@@ -442,6 +472,13 @@
   border-color: rgba(124, 58, 237, 0.55);
   box-shadow: 0 10px 26px rgba(124, 58, 237, 0.12);
   background: linear-gradient(180deg, rgba(124, 58, 237, 0.10), rgba(255, 255, 255, 0.0) 45%),
+    #fff;
+}
+
+.wechatEditor__prose blockquote.frame--tone {
+  border-color: var(--wechat-accent);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.08);
+  background: linear-gradient(180deg, var(--wechat-accent-soft), rgba(255, 255, 255, 0.0) 45%),
     #fff;
 }
 
@@ -483,6 +520,49 @@
   border-color: rgba(124, 58, 237, 0.22);
   background: rgba(124, 58, 237, 0.04);
 }
+
+.wechatEditor__prose .frame--tone .frame__scroll {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: var(--wechat-accent-softer);
+}
+
+/* Per-component tone overrides */
+.wechatEditor__prose .tone.tone--red {
+  --wechat-accent: #d11a2a;
+  --wechat-accent-soft: rgba(209, 26, 42, 0.12);
+  --wechat-accent-softer: rgba(209, 26, 42, 0.08);
+}
+.wechatEditor__prose .tone.tone--gold {
+  --wechat-accent: #b7791f;
+  --wechat-accent-soft: rgba(183, 121, 31, 0.14);
+  --wechat-accent-softer: rgba(183, 121, 31, 0.09);
+}
+.wechatEditor__prose .tone.tone--purple {
+  --wechat-accent: #6d28d9;
+  --wechat-accent-soft: rgba(109, 40, 217, 0.12);
+  --wechat-accent-softer: rgba(109, 40, 217, 0.08);
+}
+.wechatEditor__prose .tone.tone--green {
+  --wechat-accent: #0f766e;
+  --wechat-accent-soft: rgba(15, 118, 110, 0.14);
+  --wechat-accent-softer: rgba(15, 118, 110, 0.09);
+}
+.wechatEditor__prose .tone.tone--blue {
+  --wechat-accent: #1d4ed8;
+  --wechat-accent-soft: rgba(29, 78, 216, 0.12);
+  --wechat-accent-softer: rgba(29, 78, 216, 0.08);
+}
+.wechatEditor__prose .tone.tone--gray {
+  --wechat-accent: rgba(0, 0, 0, 0.55);
+  --wechat-accent-soft: rgba(0, 0, 0, 0.08);
+  --wechat-accent-softer: rgba(0, 0, 0, 0.06);
+}
+
+.wechatEditor__prose p.divider.tone { color: var(--wechat-accent); }
+.wechatEditor__prose p.caption.tone { color: var(--wechat-accent); }
+.wechatEditor__prose hr.tone { border-top-color: var(--wechat-accent); }
+.wechatEditor__prose ul.tone li::marker,
+.wechatEditor__prose ol.tone li::marker { color: var(--wechat-accent); }
 
 .wechatEditor__prose .frame--royal .frame__scroll::-webkit-scrollbar-thumb {
   background: rgba(124, 58, 237, 0.30);
