@@ -5,7 +5,7 @@ on:
     types: [opened, labeled]
 
 permissions:
-  contents: read
+  contents: write
   actions: read
   issues: write
 
@@ -45,6 +45,17 @@ jobs:
           path: wechatedit-dist.zip
           retention-days: 30
 
+      - name: Publish to GitHub Release (nightly)
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: nightly
+          name: Nightly
+          prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: wechatedit-dist.zip
+
       - name: Comment download link
         uses: actions/github-script@v7
         with:
@@ -53,6 +64,10 @@ jobs:
             const repo = context.repo.repo;
             const issue_number = context.payload.issue.number;
             const run_id = context.runId;
+
+            const releaseTag = 'nightly';
+            const releasePageUrl = `${context.serverUrl}/${owner}/${repo}/releases/tag/${releaseTag}`;
+            const releaseAssetUrl = `${context.serverUrl}/${owner}/${repo}/releases/download/${releaseTag}/wechatedit-dist.zip`;
 
             const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
               owner,
@@ -69,10 +84,12 @@ jobs:
             const body = [
               '已生成可下载构建包（ZIP）。',
               '',
-              `- 直接下载：${artifactUrl}`,
+              `- 公网直链（推荐）：${releaseAssetUrl}`,
+              `- Release 页面：${releasePageUrl}`,
+              `- Actions artifact（备选）：${artifactUrl}`,
               `- 运行详情：${runUrl}`,
               '',
-              '说明：这是 Actions artifact（默认需要登录 GitHub；且会在一段时间后过期）。',
+              '说明：Release 直链在仓库为公开仓库时可免登录下载；artifact 通常需要登录且会过期。',
             ].join('\n');
 
             await github.rest.issues.createComment({

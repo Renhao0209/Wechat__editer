@@ -60,7 +60,9 @@ npm run preview
 
 1. 打开 Issues → New issue
 2. 选择「一键下载构建包（ZIP）」模板并提交
-3. 等待 Actions 完成后，会在该 Issue 评论区给出 ZIP 下载链接（artifact）
+3. 等待 Actions 完成后，会在该 Issue 评论区给出 ZIP 下载链接
+
+说明：会同步一份到 Release（`nightly`）作为公网直链（仓库公开时免登录），同时保留 Actions artifact 备选链接。
 
 ## 推荐工作流（更贴近公众号后台）
 

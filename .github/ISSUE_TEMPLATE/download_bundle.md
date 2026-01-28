@@ -6,7 +6,10 @@ labels: ["request: bundle", "scope: export"]
 assignees: ""
 ---
 
-> 提示：创建 Issue 后，Actions 会自动构建并在下方评论给出 ZIP 下载链接（artifact）。
+> 提示：创建 Issue 后，Actions 会自动构建并在下方评论给出 ZIP 下载链接。
+>
+> - 优先给出 Release（nightly）公网直链（仓库公开时免登录）
+> - 同时保留 Actions artifact 链接（通常需要登录且会过期）
 
 ## 你要下载什么？
 
