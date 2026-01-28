@@ -30,14 +30,19 @@ import { BulletListWithClass } from './extensions/bulletListWithClass'
 import { OrderedListWithClass } from './extensions/orderedListWithClass'
 import { HorizontalRuleWithClass } from './extensions/horizontalRuleWithClass'
 import './wechatEditor.css'
+import MarkdownIt from 'markdown-it'
+import TurndownService from 'turndown'
 
 const STORAGE_KEY = 'wechatedit:html'
 const STORAGE_THEME_KEY = 'wechatedit:theme'
 const STORAGE_CUSTOM_THEMES_KEY = 'wechatedit:customThemes'
 const STORAGE_VIEW_KEY = 'wechatedit:view'
 const STORAGE_COMPONENT_CONFIGS_KEY = 'wechatedit:componentConfigs'
+const STORAGE_EDITOR_FORMAT_KEY = 'wechatedit:editorFormat'
 
 type ViewMode = 'split' | 'edit' | 'preview'
+
+type EditorFormat = 'rich' | 'markdown'
 
 type ComponentUiCategory = Exclude<ComponentCategory, '分隔'>
 
@@ -207,6 +212,26 @@ export default function WeChatEditor() {
   const [isImportOpen, setIsImportOpen] = useState(false)
   const [importHtml, setImportHtml] = useState('')
 
+  const [editorFormat, setEditorFormat] = useState<EditorFormat>(() => {
+    const saved = safeReadLocalStorage(STORAGE_EDITOR_FORMAT_KEY)
+    if (saved === 'markdown' || saved === 'rich') return saved
+    return 'rich'
+  })
+
+  const markdownIt = useMemo(() => {
+    return new MarkdownIt({ html: true, breaks: true, linkify: true })
+  }, [])
+
+  const turndown = useMemo(() => {
+    const service = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' })
+    service.keep(['img', 'span', 'div'])
+    return service
+  }, [])
+
+  const markdownApplyTimerRef = useRef<number | null>(null)
+  const isMarkdownTypingRef = useRef(false)
+  const [markdownText, setMarkdownText] = useState<string>('')
+
   const [isThemeImportOpen, setIsThemeImportOpen] = useState(false)
   const [themeImportText, setThemeImportText] = useState('')
 
@@ -217,6 +242,7 @@ export default function WeChatEditor() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null)
   const editorScrollRef = useRef<HTMLDivElement | null>(null)
+  const markdownScrollRef = useRef<HTMLTextAreaElement | null>(null)
   const previewScrollRef = useRef<HTMLDivElement | null>(null)
   const isSyncingScrollRef = useRef(false)
 
@@ -342,6 +368,10 @@ export default function WeChatEditor() {
   })
 
   useEffect(() => {
+    safeWriteLocalStorage(STORAGE_EDITOR_FORMAT_KEY, editorFormat)
+  }, [editorFormat])
+
+  useEffect(() => {
     safeWriteLocalStorage(STORAGE_THEME_KEY, theme)
   }, [theme])
 
@@ -354,18 +384,26 @@ export default function WeChatEditor() {
   }, [customThemes])
 
   useEffect(() => {
-    const editorEl = editorScrollRef.current
+    const editorEl = editorFormat === 'markdown' ? markdownScrollRef.current : editorScrollRef.current
     const previewEl = previewScrollRef.current
     if (!editorEl || !previewEl) return
 
-    let rafId: number | null = null
+    let rafFromEditor: number | null = null
+    let rafFromPreview: number | null = null
+
+    // Some browsers fire scroll events asynchronously after setting scrollTop.
+    // To avoid feedback loops / "self scrolling", ignore scroll events for a short window
+    // after we programmatically update the counterpart element.
+    let ignoreEditorUntil = 0
+    let ignorePreviewUntil = 0
 
     const syncFromEditor = () => {
+      if (performance.now() < ignoreEditorUntil) return
       if (isSyncingScrollRef.current) return
-      if (rafId !== null) return
+      if (rafFromEditor !== null) return
 
-      rafId = window.requestAnimationFrame(() => {
-        rafId = null
+      rafFromEditor = window.requestAnimationFrame(() => {
+        rafFromEditor = null
         const maxEditor = editorEl.scrollHeight - editorEl.clientHeight
         const maxPreview = previewEl.scrollHeight - previewEl.clientHeight
         if (maxEditor <= 0 || maxPreview <= 0) {
@@ -377,21 +415,49 @@ export default function WeChatEditor() {
 
         const ratio = editorEl.scrollTop / maxEditor
         isSyncingScrollRef.current = true
+        ignorePreviewUntil = performance.now() + 140
         previewEl.scrollTop = ratio * maxPreview
         isSyncingScrollRef.current = false
       })
     }
 
+    const syncFromPreview = () => {
+      if (performance.now() < ignorePreviewUntil) return
+      if (isSyncingScrollRef.current) return
+      if (rafFromPreview !== null) return
+
+      rafFromPreview = window.requestAnimationFrame(() => {
+        rafFromPreview = null
+        const maxPreview = previewEl.scrollHeight - previewEl.clientHeight
+        const maxEditor = editorEl.scrollHeight - editorEl.clientHeight
+        if (maxEditor <= 0 || maxPreview <= 0) {
+          isSyncingScrollRef.current = true
+          editorEl.scrollTop = 0
+          isSyncingScrollRef.current = false
+          return
+        }
+
+        const ratio = previewEl.scrollTop / maxPreview
+        isSyncingScrollRef.current = true
+        ignoreEditorUntil = performance.now() + 140
+        editorEl.scrollTop = ratio * maxEditor
+        isSyncingScrollRef.current = false
+      })
+    }
+
     editorEl.addEventListener('scroll', syncFromEditor, { passive: true })
+    previewEl.addEventListener('scroll', syncFromPreview, { passive: true })
 
     // Initial sync (e.g., after switching view mode)
     syncFromEditor()
 
     return () => {
       editorEl.removeEventListener('scroll', syncFromEditor)
-      if (rafId !== null) window.cancelAnimationFrame(rafId)
+      previewEl.removeEventListener('scroll', syncFromPreview)
+      if (rafFromEditor !== null) window.cancelAnimationFrame(rafFromEditor)
+      if (rafFromPreview !== null) window.cancelAnimationFrame(rafFromPreview)
     }
-  }, [viewMode])
+  }, [editorFormat, viewMode])
 
   const selectedCustomTheme = useMemo(() => {
     if (!theme.startsWith('custom:')) return undefined
@@ -400,6 +466,29 @@ export default function WeChatEditor() {
   }, [customThemes, theme])
 
   const previewHtml = currentHtml
+
+  const htmlToMarkdown = (html: string): string => {
+    try {
+      return turndown.turndown(html)
+    } catch {
+      return html
+    }
+  }
+
+  const markdownToHtml = (md: string): string => {
+    try {
+      return markdownIt.render(md)
+    } catch {
+      return `<p>${md.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</p>`
+    }
+  }
+
+  // Keep textarea in sync when content changes via buttons/components while in Markdown mode.
+  useEffect(() => {
+    if (editorFormat !== 'markdown') return
+    if (isMarkdownTypingRef.current) return
+    setMarkdownText(htmlToMarkdown(currentHtml))
+  }, [currentHtml, editorFormat])
 
   const exportFullHtml = useMemo(() => {
     return buildWeChatHtmlDocument({
@@ -446,6 +535,51 @@ export default function WeChatEditor() {
       return false
     }
     return true
+  }
+
+  function handleSwitchToMarkdown() {
+    if (!ensureEditor()) return
+    isMarkdownTypingRef.current = false
+    const html = editor.getHTML()
+    setMarkdownText(htmlToMarkdown(html))
+    setEditorFormat('markdown')
+    flash('已切换：Markdown 源码')
+  }
+
+  function handleSwitchToRich() {
+    if (!ensureEditor()) return
+    const html = markdownToHtml(markdownText)
+    // Update both editor and preview/export state.
+    editor.commands.setContent(html)
+    safeWriteLocalStorage(STORAGE_KEY, html)
+    setCurrentHtml(html)
+    setEditorFormat('rich')
+    flash('已切换：富文本')
+  }
+
+  function handleMarkdownChange(next: string) {
+    setMarkdownText(next)
+    isMarkdownTypingRef.current = true
+
+    if (markdownApplyTimerRef.current !== null) {
+      window.clearTimeout(markdownApplyTimerRef.current)
+      markdownApplyTimerRef.current = null
+    }
+
+    markdownApplyTimerRef.current = window.setTimeout(() => {
+      markdownApplyTimerRef.current = null
+      const html = markdownToHtml(next)
+      if (editor) {
+        // Avoid triggering onUpdate for every keystroke.
+        editor.commands.setContent(html, { emitUpdate: false })
+      }
+      safeWriteLocalStorage(STORAGE_KEY, html)
+      setCurrentHtml(html)
+
+      window.setTimeout(() => {
+        isMarkdownTypingRef.current = false
+      }, 350)
+    }, 220)
   }
 
   function closeMoreMenu() {
@@ -883,6 +1017,27 @@ export default function WeChatEditor() {
             </button>
           </div>
 
+          <div className="wechatSeg" role="group" aria-label="编辑格式">
+            <button
+              type="button"
+              className={`wechatSeg__btn ${editorFormat === 'rich' ? 'is-active' : ''}`}
+              aria-pressed={editorFormat === 'rich'}
+              onClick={() => (editorFormat === 'rich' ? undefined : handleSwitchToRich())}
+              title="富文本编辑（所见即所得）"
+            >
+              富文本
+            </button>
+            <button
+              type="button"
+              className={`wechatSeg__btn ${editorFormat === 'markdown' ? 'is-active' : ''}`}
+              aria-pressed={editorFormat === 'markdown'}
+              onClick={() => (editorFormat === 'markdown' ? undefined : handleSwitchToMarkdown())}
+              title="Markdown 源码编辑（支持直接写 HTML）"
+            >
+              Markdown
+            </button>
+          </div>
+
           <label className="wechatField">
             <span>主题</span>
             <select value={theme} onChange={(e) => setTheme(e.target.value as WeChatThemeId)}>
@@ -1062,8 +1217,126 @@ export default function WeChatEditor() {
       </header>
 
       <main className={`wechatMain wechatMain--${viewMode}`}>
+        <aside className="wechatLibraryDock" aria-label="素材库">
+          <aside className="wechatLibrary" aria-label="素材库">
+            <div className="wechatLibrary__tabs" role="tablist" aria-label="素材库">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={libraryTab === 'components'}
+                className={`wechatLibrary__tab ${libraryTab === 'components' ? 'is-active' : ''}`}
+                onClick={() => setLibraryTab('components')}
+              >
+                组件
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={libraryTab === 'layouts'}
+                className={`wechatLibrary__tab ${libraryTab === 'layouts' ? 'is-active' : ''}`}
+                onClick={() => setLibraryTab('layouts')}
+              >
+                套版
+              </button>
+            </div>
+
+            {libraryTab === 'components' && (
+              <div className="wechatLibrary__panel" role="tabpanel">
+                <div className="wechatLibrary__hint">点击即可插入到光标位置</div>
+                <div className="wechatLibrary__tools" aria-label="组件筛选">
+                  <input
+                    className="wechatLibrary__search"
+                    value={componentQuery}
+                    onChange={(e) => setComponentQuery(e.target.value)}
+                    placeholder="搜索组件（名称/描述/ID）"
+                  />
+
+                  <div className="wechatLibrary__cats" role="group" aria-label="组件分类">
+                    <button
+                      type="button"
+                      className={`wechatPill ${componentCategory === 'all' ? 'is-active' : ''}`}
+                      onClick={() => setComponentCategory('all')}
+                    >
+                      全部
+                    </button>
+                    {COMPONENT_CATEGORY_ORDER.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        className={`wechatPill ${componentCategory === cat ? 'is-active' : ''}`}
+                        onClick={() => setComponentCategory(cat)}
+                      >
+                        {COMPONENT_CATEGORY_LABEL[cat]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {filteredComponents.length === 0 ? (
+                  <div className="wechatLibrary__empty">没有匹配的组件</div>
+                ) : (
+                  (componentCategory === 'all' ? COMPONENT_CATEGORY_ORDER : [componentCategory]).map((cat) => {
+                    const list = filteredComponents.filter((c) => toUiCategory(c.category) === cat)
+                    if (list.length === 0) return null
+                    return (
+                      <div key={cat} className="wechatLibrary__group">
+                        <div className="wechatLibrary__groupTitle">{COMPONENT_CATEGORY_LABEL[cat]}</div>
+                        <div className="wechatLibrary__grid">
+                          {list.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              className="wechatCardBtn"
+                              onClick={() => handleInsertComponent(c.id)}
+                              title={c.desc ?? c.name}
+                            >
+                              <div className="wechatCardBtn__title">{c.name}</div>
+                              {c.desc && <div className="wechatCardBtn__desc">{c.desc}</div>}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            )}
+
+            {libraryTab === 'layouts' && (
+              <div className="wechatLibrary__panel" role="tabpanel">
+                <div className="wechatLibrary__hint">
+                  「整篇套版」会覆盖当前内容；「智能套版」会在保留内容的前提下增强样式。
+                </div>
+
+                <button type="button" className="wechatPrimaryAction" onClick={handleSmartFormat}>
+                  智能套版（不覆盖）
+                </button>
+
+                <div className="wechatLibrary__group">
+                  <div className="wechatLibrary__groupTitle">整篇模板（覆盖）</div>
+                  <div className="wechatLibrary__grid">
+                    {LAYOUT_PRESETS.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="wechatCardBtn"
+                        onClick={() => handleApplyLayoutReplace(p.id)}
+                        title={p.desc}
+                      >
+                        <div className="wechatCardBtn__title">{p.name}</div>
+                        <div className="wechatCardBtn__desc">{p.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </aside>
+        </aside>
+
         <section className="wechatPanel">
-          <div className="wechatToolbar">
+          {editorFormat === 'rich' && (
+            <div className="wechatToolbar">
             <ToolbarButton
               label="加粗"
               active={!!editor?.isActive('bold')}
@@ -1201,134 +1474,31 @@ export default function WeChatEditor() {
             >
               清格式
             </ToolbarButton>
-          </div>
+            </div>
+          )}
 
           <div className="wechatPanelBody">
             <div className="wechatEditorWrap" ref={editorScrollRef}>
-              {editor ? <EditorContent editor={editor} /> : <div className="loading">加载编辑器…</div>}
+              {editorFormat === 'markdown' ? (
+                <textarea
+                  className="wechatMarkdownEditor"
+                  ref={markdownScrollRef}
+                  value={markdownText}
+                  onChange={(e) => handleMarkdownChange(e.target.value)}
+                  placeholder={'# 标题\n\n在这里用 Markdown 写作…\n\n也可以直接写 HTML（会原样渲染）。'}
+                />
+              ) : editor ? (
+                <EditorContent editor={editor} />
+              ) : (
+                <div className="loading">加载编辑器…</div>
+              )}
             </div>
-
-            <aside className="wechatLibrary" aria-label="素材库">
-              <div className="wechatLibrary__tabs" role="tablist" aria-label="素材库">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={libraryTab === 'components'}
-                  className={`wechatLibrary__tab ${libraryTab === 'components' ? 'is-active' : ''}`}
-                  onClick={() => setLibraryTab('components')}
-                >
-                  组件
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={libraryTab === 'layouts'}
-                  className={`wechatLibrary__tab ${libraryTab === 'layouts' ? 'is-active' : ''}`}
-                  onClick={() => setLibraryTab('layouts')}
-                >
-                  套版
-                </button>
-              </div>
-
-              {libraryTab === 'components' && (
-                <div className="wechatLibrary__panel" role="tabpanel">
-                  <div className="wechatLibrary__hint">点击即可插入到光标位置</div>
-                  <div className="wechatLibrary__tools" aria-label="组件筛选">
-                    <input
-                      className="wechatLibrary__search"
-                      value={componentQuery}
-                      onChange={(e) => setComponentQuery(e.target.value)}
-                      placeholder="搜索组件（名称/描述/ID）"
-                    />
-
-                    <div className="wechatLibrary__cats" role="group" aria-label="组件分类">
-                      <button
-                        type="button"
-                        className={`wechatPill ${componentCategory === 'all' ? 'is-active' : ''}`}
-                        onClick={() => setComponentCategory('all')}
-                      >
-                        全部
-                      </button>
-                      {COMPONENT_CATEGORY_ORDER.map((cat) => (
-                        <button
-                          key={cat}
-                          type="button"
-                          className={`wechatPill ${componentCategory === cat ? 'is-active' : ''}`}
-                          onClick={() => setComponentCategory(cat)}
-                        >
-                          {COMPONENT_CATEGORY_LABEL[cat]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {filteredComponents.length === 0 ? (
-                    <div className="wechatLibrary__empty">没有匹配的组件</div>
-                  ) : (
-                    (componentCategory === 'all'
-                      ? COMPONENT_CATEGORY_ORDER
-                      : [componentCategory]
-                    ).map((cat) => {
-                      const list = filteredComponents.filter((c) => toUiCategory(c.category) === cat)
-                      if (list.length === 0) return null
-                      return (
-                        <div key={cat} className="wechatLibrary__group">
-                          <div className="wechatLibrary__groupTitle">{COMPONENT_CATEGORY_LABEL[cat]}</div>
-                          <div className="wechatLibrary__grid">
-                            {list.map((c) => (
-                              <button
-                                key={c.id}
-                                type="button"
-                                className="wechatCardBtn"
-                                onClick={() => handleInsertComponent(c.id)}
-                                title={c.desc ?? c.name}
-                              >
-                                <div className="wechatCardBtn__title">{c.name}</div>
-                                {c.desc && <div className="wechatCardBtn__desc">{c.desc}</div>}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              )}
-
-              {libraryTab === 'layouts' && (
-                <div className="wechatLibrary__panel" role="tabpanel">
-                  <div className="wechatLibrary__hint">
-                    「整篇套版」会覆盖当前内容；「智能套版」会在保留内容的前提下增强样式。
-                  </div>
-
-                  <button type="button" className="wechatPrimaryAction" onClick={handleSmartFormat}>
-                    智能套版（不覆盖）
-                  </button>
-
-                  <div className="wechatLibrary__group">
-                    <div className="wechatLibrary__groupTitle">整篇模板（覆盖）</div>
-                    <div className="wechatLibrary__grid">
-                      {LAYOUT_PRESETS.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className="wechatCardBtn"
-                          onClick={() => handleApplyLayoutReplace(p.id)}
-                          title={p.desc}
-                        >
-                          <div className="wechatCardBtn__title">{p.name}</div>
-                          <div className="wechatCardBtn__desc">{p.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </aside>
           </div>
 
           <div className="wechatHint">
-            建议工作流：写作 → 套模板 → 右侧预览 → “复制完整 HTML” → 粘到公众号后台。
+            {editorFormat === 'markdown'
+              ? 'Markdown 模式：支持标准 Markdown + 直接写 HTML。切回富文本会用转换后的内容覆盖编辑器。'
+              : '建议工作流：写作 → 套模板 → 右侧预览 → “复制完整 HTML” → 粘到公众号后台。'}
           </div>
         </section>
 
@@ -1509,6 +1679,7 @@ export default function WeChatEditor() {
 function ToolbarButton(props: {
   label: string
   active?: boolean
+  disabled?: boolean
   onClick: () => void
   children: React.ReactNode
 }) {
@@ -1518,6 +1689,7 @@ function ToolbarButton(props: {
       className={`tb ${props.active ? 'tb--active' : ''}`}
       onClick={props.onClick}
       title={props.label}
+      disabled={props.disabled}
     >
       {props.children}
     </button>

@@ -356,7 +356,9 @@ export function getWeChatBaseCss(): string {
   overflow: auto;
   overscroll-behavior: contain;
   touch-action: pan-y;
-  scrollbar-gutter: stable;
+  /* Keep scroll, hide scrollbar */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   padding: 10px 10px;
   border-radius: 12px;
@@ -366,17 +368,8 @@ export function getWeChatBaseCss(): string {
 }
 
 .wechat-article .frame__scroll::-webkit-scrollbar {
-  width: 10px;
-}
-
-.wechat-article .frame__scroll::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 999px;
-  border: 3px solid rgba(255, 255, 255, 0.85);
-}
-
-.wechat-article .frame__scroll::-webkit-scrollbar-track {
-  background: transparent;
+  width: 0;
+  height: 0;
 }
 
 .wechat-article .frame--royal .frame__scroll {
@@ -389,9 +382,10 @@ export function getWeChatBaseCss(): string {
   background: var(--wechat-accent-softer);
 }
 
-.wechat-article .frame--royal .frame__scroll::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.30);
-  border: 3px solid rgba(255, 255, 255, 0.65);
+
+.wechat-article .frame__scroll::-webkit-scrollbar-thumb,
+.wechat-article .frame__scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 `.trim()
 }

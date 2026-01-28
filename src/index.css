@@ -18,6 +18,59 @@ body,
 
 body {
   margin: 0;
+  overflow: hidden;
+}
+
+#root {
+  overflow: hidden;
+}
+
+/* Global scrollbar polish (helps when outer scrollbar appears) */
+html,
+body {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+html:hover,
+body:hover {
+  scrollbar-color: rgba(17, 17, 17, 0.30) transparent;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+
+html:hover::-webkit-scrollbar-thumb,
+body:hover::-webkit-scrollbar-thumb {
+  background: rgba(17, 17, 17, 0.22);
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 17, 17, 0.30);
+}
+
+html::-webkit-scrollbar-thumb:active,
+body::-webkit-scrollbar-thumb:active {
+  background: rgba(17, 17, 17, 0.40);
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+html::-webkit-scrollbar-corner,
+body::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 * {
