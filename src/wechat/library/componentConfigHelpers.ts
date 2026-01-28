@@ -35,6 +35,10 @@ export function escapeHtml(text: string): string {
     .replaceAll("'", '&#39;')
 }
 
+export function escapeHtmlAttr(text: string): string {
+  return escapeHtml(text)
+}
+
 export function escapeHtmlWithBreaks(text: string): string {
   return escapeHtml(text).replace(/\r\n|\r|\n/g, '<br />')
 }
@@ -44,5 +48,27 @@ export function buildConfig(title: string, desc: string | undefined, fields: Com
     title,
     desc,
     fields,
+  }
+}
+
+export function encodeComponentProps(values: Record<string, string>): string {
+  return encodeURIComponent(JSON.stringify(values))
+}
+
+export function decodeComponentProps(raw: string): Record<string, string> | null {
+  if (!raw) return null
+  try {
+    const decoded = decodeURIComponent(raw)
+    const parsed = JSON.parse(decoded) as unknown
+    if (!parsed || typeof parsed !== 'object') return null
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v
+      else if (typeof v === 'number' || typeof v === 'boolean') out[k] = String(v)
+      else if (v == null) out[k] = ''
+    }
+    return out
+  } catch {
+    return null
   }
 }

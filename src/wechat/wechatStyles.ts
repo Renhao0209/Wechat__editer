@@ -51,6 +51,21 @@ export function getWeChatBaseCss(): string {
 }
 
 .wechat-article {
+  /* Token aliases (v1): gradually migrate components to --wce-* */
+  --wce-text: var(--wechat-text);
+  --wce-muted: var(--wechat-muted);
+  --wce-border: var(--wechat-border);
+  --wce-bg: var(--wechat-bg);
+  --wce-accent: var(--wechat-accent);
+  --wce-accent-soft: var(--wechat-accent-soft);
+  --wce-accent-softer: var(--wechat-accent-softer);
+  --wce-heading: var(--wechat-heading);
+  --wce-radius-sm: 8px;
+  --wce-radius-md: 12px;
+  --wce-radius-lg: 14px;
+  --wce-shadow-1: 0 8px 18px rgba(0, 0, 0, 0.05);
+  --wce-shadow-2: 0 10px 24px rgba(0, 0, 0, 0.08);
+
   color: var(--wechat-text);
   background: var(--wechat-bg);
   font-size: var(--wechat-font-size);

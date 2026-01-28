@@ -22,6 +22,7 @@ import type { ComponentCategory, ComponentConfigSchema, ComponentItem } from './
 import { LAYOUT_PRESETS } from './library/layoutPresets'
 import { TEMPLATES } from './library/templates'
 import { buildInlinedWeChatArticleHtml } from './inlineWeChat'
+import { decodeComponentProps } from './library/componentConfigHelpers'
 import { BlockquoteWithClass } from './extensions/blockquoteWithClass'
 import { ParagraphWithClass } from './extensions/paragraphWithClass'
 import { HeadingWithClass } from './extensions/headingWithClass'
@@ -45,6 +46,13 @@ type ViewMode = 'split' | 'edit' | 'preview'
 type EditorFormat = 'rich' | 'markdown'
 
 type ComponentUiCategory = Exclude<ComponentCategory, '分隔'>
+
+type SelectedComponentInstance = {
+  componentId: string
+  from: number
+  to: number
+  values: Record<string, string>
+}
 
 const DEFAULT_CONTENT = `
 <h1>标题示例</h1>
@@ -262,7 +270,10 @@ export default function WeChatEditor() {
 
   const [currentHtml, setCurrentHtml] = useState<string>(initialHtml)
 
-  const [libraryTab, setLibraryTab] = useState<'components' | 'layouts'>('components')
+  const [libraryTab, setLibraryTab] = useState<'components' | 'layouts' | 'props'>('components')
+
+  const [selectedComponent, setSelectedComponent] = useState<SelectedComponentInstance | null>(null)
+  const [componentPropsValues, setComponentPropsValues] = useState<Record<string, string>>({})
 
   const COMPONENT_CATEGORY_ORDER: ComponentUiCategory[] = useMemo(
     () => ['标题', '卡片', '引用', '分割线', '清单', '图片'],
@@ -370,7 +381,48 @@ export default function WeChatEditor() {
       safeWriteLocalStorage(STORAGE_KEY, html)
       setCurrentHtml(html)
     },
+    onSelectionUpdate: ({ editor: next }) => {
+      try {
+        const state = next.state
+        const $from = state.selection.$from
+
+        for (let depth = $from.depth; depth >= 0; depth--) {
+          const node = $from.node(depth)
+          const attrs = (node?.attrs ?? {}) as Record<string, unknown>
+          const componentId = typeof attrs.wceComponent === 'string' ? (attrs.wceComponent as string) : ''
+          if (!componentId) continue
+
+          const target = COMPONENTS.find((c) => c.id === componentId)
+          if (!target?.config || !target.render) continue
+
+          const defaults = getDefaultComponentConfigValues(target.config)
+          const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
+          const decoded = rawProps ? decodeComponentProps(rawProps) : null
+          const saved = readSavedComponentConfigValues(componentId) ?? {}
+          const values = { ...defaults, ...saved, ...(decoded ?? {}) }
+
+          const from = $from.before(depth)
+          const to = from + node.nodeSize
+
+          setSelectedComponent({ componentId, from, to, values })
+          return
+        }
+
+        setSelectedComponent(null)
+      } catch {
+        setSelectedComponent(null)
+      }
+    },
   })
+
+  useEffect(() => {
+    if (libraryTab !== 'props') return
+    if (!selectedComponent) {
+      setComponentPropsValues({})
+      return
+    }
+    setComponentPropsValues(selectedComponent.values)
+  }, [libraryTab, selectedComponent])
 
   useEffect(() => {
     safeWriteLocalStorage(STORAGE_EDITOR_FORMAT_KEY, editorFormat)
@@ -794,6 +846,27 @@ export default function WeChatEditor() {
       editor.chain().focus().insertContent(c.html).run()
     }
     flash(`已插入：${c.name}`)
+  }
+
+  function handleApplySelectedComponentProps() {
+    if (!ensureEditor()) return
+    if (!selectedComponent) {
+      flash('未选中可编辑组件：请先在正文中点一下组件块')
+      return
+    }
+
+    const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
+    if (!c?.config || !c.render) return
+
+    writeSavedComponentConfigValues(c.id, componentPropsValues)
+    const rendered = c.render(componentPropsValues)
+    const range = { from: selectedComponent.from, to: selectedComponent.to }
+    if ('content' in rendered) {
+      editor.chain().focus().insertContentAt(range, rendered.content).run()
+    } else {
+      editor.chain().focus().insertContentAt(range, rendered.html).run()
+    }
+    flash(`已更新组件：${c.name}`)
   }
 
   function handleConfirmInsertConfiguredComponent() {
@@ -1643,6 +1716,16 @@ export default function WeChatEditor() {
               >
                 套版
               </button>
+
+              <button
+                type="button"
+                role="tab"
+                aria-selected={libraryTab === 'props'}
+                className={`wechatLibrary__tab ${libraryTab === 'props' ? 'is-active' : ''}`}
+                onClick={() => setLibraryTab('props')}
+              >
+                属性
+              </button>
             </div>
 
             {libraryTab === 'components' && (
@@ -1734,6 +1817,87 @@ export default function WeChatEditor() {
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {libraryTab === 'props' && (
+              <div className="wechatLibrary__panel" role="tabpanel">
+                <div className="wechatProps__title">组件属性</div>
+                <div className="wechatProps__hint">
+                  先在正文里点选一个组件块（例如提示框/卡片/标题条），这里就能调整参数并应用。
+                </div>
+
+                {!selectedComponent ? (
+                  <div className="wechatLibrary__empty">未选中可编辑组件</div>
+                ) : (
+                  (() => {
+                    const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
+                    if (!c?.config) return <div className="wechatLibrary__empty">该组件暂不支持属性编辑</div>
+
+                    return (
+                      <>
+                        <div className="wechatProps__meta">
+                          <div className="wechatProps__name">{c.name}</div>
+                          <div className="wechatProps__id">{c.id}</div>
+                        </div>
+
+                        {c.config.fields.map((f) => (
+                          <label key={f.key} className="wechatProps__field">
+                            <div className="wechatProps__label">{f.label}</div>
+                            {f.type === 'select' ? (
+                              <select
+                                className="wechatProps__input"
+                                value={componentPropsValues[f.key] ?? ''}
+                                onChange={(e) =>
+                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                                }
+                              >
+                                {(f.options ?? []).map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : f.type === 'color' ? (
+                              <input
+                                className="wechatProps__input"
+                                type="color"
+                                value={componentPropsValues[f.key] ?? f.default ?? '#000000'}
+                                onChange={(e) =>
+                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                                }
+                              />
+                            ) : f.type === 'textarea' ? (
+                              <textarea
+                                className="wechatProps__textarea"
+                                value={componentPropsValues[f.key] ?? ''}
+                                placeholder={f.placeholder}
+                                onChange={(e) =>
+                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                                }
+                              />
+                            ) : (
+                              <input
+                                className="wechatProps__input"
+                                value={componentPropsValues[f.key] ?? ''}
+                                placeholder={f.placeholder}
+                                onChange={(e) =>
+                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                                }
+                              />
+                            )}
+                          </label>
+                        ))}
+
+                        <div className="wechatProps__actions">
+                          <button type="button" className="wechatPrimaryAction" onClick={handleApplySelectedComponentProps}>
+                            应用到当前组件
+                          </button>
+                        </div>
+                      </>
+                    )
+                  })()
+                )}
               </div>
             )}
           </aside>

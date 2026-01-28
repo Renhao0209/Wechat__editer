@@ -1,5 +1,12 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'titlebarH2',
@@ -16,7 +23,8 @@ const component = {
     const cls = toneClass(values)
     const text = escapeHtml((values.text || '章节标题').trim()) || '章节标题'
     const className = ['titlebar', cls].filter(Boolean).join(' ')
-    return { html: `<h2 class="${className}">${text}</h2><p></p>` }
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+    return { html: `<h2 class="${className}" data-wce-component="titlebarH2" data-wce-props="${propsRaw}">${text}</h2><p></p>` }
   },
 } satisfies BuiltInComponentDef
 

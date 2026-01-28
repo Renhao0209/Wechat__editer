@@ -1,5 +1,13 @@
 import type { BuiltInComponentDef } from '../componentRegistryTypes'
-import { buildConfig, escapeHtml, escapeHtmlWithBreaks, toneClass, toneField } from '../componentConfigHelpers'
+import {
+  buildConfig,
+  encodeComponentProps,
+  escapeHtml,
+  escapeHtmlAttr,
+  escapeHtmlWithBreaks,
+  toneClass,
+  toneField,
+} from '../componentConfigHelpers'
 
 const component = {
   id: 'calloutInfo',
@@ -35,8 +43,10 @@ const component = {
         ? ['callout', clsTone].filter(Boolean).join(' ')
         : ['callout', `callout--${variant}`].join(' ')
 
+    const propsRaw = escapeHtmlAttr(encodeComponentProps(values))
+
     return {
-      html: `<blockquote class="${className}"><p><strong>${title}</strong></p><p>${body}</p></blockquote><p></p>`,
+      html: `<blockquote class="${className}" data-wce-component="calloutInfo" data-wce-props="${propsRaw}"><p><strong>${title}</strong></p><p>${body}</p></blockquote><p></p>`,
     }
   },
 } satisfies BuiltInComponentDef
