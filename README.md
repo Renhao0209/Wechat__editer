@@ -10,6 +10,8 @@
 
 - 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - 提交前可先开 Issue（Bug / 主题提案 / 组件提案），仓库已提供模板（`.github/ISSUE_TEMPLATE/`）
+- License：[LICENSE](LICENSE)
+- 建议的 Issue/PR Labels：见 [.github/labels.md](.github/labels.md)
 
 ## 版本与发布（最小策略）
 
