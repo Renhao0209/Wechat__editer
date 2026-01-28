@@ -4,7 +4,7 @@ export type TemplateItem = {
   html: string
 }
 
-export type ComponentCategory = '标题' | '卡片' | '引用' | '分隔' | '清单' | '图片'
+export type ComponentCategory = '标题' | '卡片' | '引用' | '分隔' | '分割线' | '清单' | '图片'
 
 export type ComponentItem = {
   id: string

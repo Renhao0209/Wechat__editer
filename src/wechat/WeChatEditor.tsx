@@ -35,6 +35,8 @@ const STORAGE_VIEW_KEY = 'wechatedit:view'
 
 type ViewMode = 'split' | 'edit' | 'preview'
 
+type ComponentUiCategory = Exclude<ComponentCategory, '分隔'>
+
 const DEFAULT_CONTENT = `
 <h1>标题示例</h1>
 <p class="lead">这是一段导语：用一句话概括文章价值，吸引读者继续往下看。</p>
@@ -202,30 +204,33 @@ export default function WeChatEditor() {
 
   const [libraryTab, setLibraryTab] = useState<'components' | 'layouts'>('components')
 
-  const COMPONENT_CATEGORY_ORDER: ComponentCategory[] = useMemo(
-    () => ['标题', '卡片', '引用', '分隔', '清单', '图片'],
+  const COMPONENT_CATEGORY_ORDER: ComponentUiCategory[] = useMemo(
+    () => ['标题', '卡片', '引用', '分割线', '清单', '图片'],
     [],
   )
 
-  const COMPONENT_CATEGORY_LABEL: Record<ComponentCategory, string> = useMemo(
+  const COMPONENT_CATEGORY_LABEL: Record<ComponentUiCategory, string> = useMemo(
     () => ({
       标题: '标题',
       卡片: '内容框',
       引用: '引用',
-      分隔: '分割线',
+      分割线: '分割线',
       清单: '清单',
       图片: '图片',
     }),
     [],
   )
 
-  const [componentCategory, setComponentCategory] = useState<ComponentCategory | 'all'>('all')
+  const toUiCategory = (cat: ComponentCategory): ComponentUiCategory =>
+    cat === '分隔' ? '分割线' : cat
+
+  const [componentCategory, setComponentCategory] = useState<ComponentUiCategory | 'all'>('all')
   const [componentQuery, setComponentQuery] = useState('')
 
   const filteredComponents = useMemo(() => {
     const q = componentQuery.trim().toLowerCase()
     return COMPONENTS.filter((c) => {
-      if (componentCategory !== 'all' && c.category !== componentCategory) return false
+      if (componentCategory !== 'all' && toUiCategory(c.category) !== componentCategory) return false
       if (!q) return true
       return (
         c.name.toLowerCase().includes(q) ||
@@ -1135,9 +1140,9 @@ export default function WeChatEditor() {
                   ) : (
                     (componentCategory === 'all'
                       ? COMPONENT_CATEGORY_ORDER
-                      : [componentCategory as ComponentCategory]
+                      : [componentCategory]
                     ).map((cat) => {
-                      const list = filteredComponents.filter((c) => c.category === cat)
+                      const list = filteredComponents.filter((c) => toUiCategory(c.category) === cat)
                       if (list.length === 0) return null
                       return (
                         <div key={cat} className="wechatLibrary__group">

@@ -4,6 +4,7 @@ import card from './card'
 import checklist from './checklist'
 import dividerFancy from './dividerFancy'
 import dividerLine from './dividerLine'
+import separatorLanternDynamic from './separator-lantern-dynamic'
 import guide from './guide'
 import imageCaption from './imageCaption'
 import quoteFocus from './quoteFocus'
@@ -23,6 +24,7 @@ export const BUILT_IN_COMPONENTS_LIST = [
   calloutInfo,
   dividerLine,
   dividerFancy,
+  separatorLanternDynamic,
   checklist,
   steps,
   imageCaption,
