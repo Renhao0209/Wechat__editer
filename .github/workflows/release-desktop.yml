@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.1.1). Leave empty when triggered by tag push.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -32,6 +37,27 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run build:desktop
 
+      - name: Verify packaging outputs
+        shell: pwsh
+        run: |
+          if (-not (Test-Path release)) {
+            throw 'release/ not found. electron-builder did not produce output.'
+          }
+
+          Write-Host '--- release/ files ---'
+          Get-ChildItem -Path release -Recurse -File |
+            Select-Object FullName, Length, LastWriteTime |
+            Sort-Object LastWriteTime -Descending |
+            Format-Table -AutoSize | Out-String | Write-Host
+
+          $installer = Get-ChildItem -Path release -File -Filter '*.exe' |
+            Where-Object { $_.Name -notlike '*__uninstaller*' } |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw 'No installer .exe found in release/. Cannot publish assets.'
+          }
+
       - name: Remove uninstaller artifact (keep installer only)
         shell: pwsh
         run: |
@@ -41,9 +67,12 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
           generateReleaseNotes: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifactErrorsFailBuild: true
           artifacts: |
             release/*.exe
             release/*.exe.blockmap
