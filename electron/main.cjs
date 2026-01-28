@@ -1,5 +1,6 @@
 const path = require('node:path')
-const { app, BrowserWindow, Menu } = require('electron')
+const { app, BrowserWindow, Menu, ipcMain } = require('electron')
+const { autoUpdater } = require('electron-updater')
 
 const APP_DISPLAY_NAME = '微信排版助手'
 
@@ -49,8 +50,60 @@ function createWindow() {
   }
 }
 
+function sendUpdateStatus(payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try {
+      w.webContents.send('updater:status', payload)
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function initAutoUpdater() {
+  // Auto-update works only for packaged builds.
+  autoUpdater.autoDownload = false
+
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ type: 'checking' }))
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ type: 'available', info }))
+  autoUpdater.on('update-not-available', (info) => sendUpdateStatus({ type: 'none', info }))
+  autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ type: 'progress', progress }))
+  autoUpdater.on('update-downloaded', (info) => sendUpdateStatus({ type: 'downloaded', info }))
+  autoUpdater.on('error', (err) => sendUpdateStatus({ type: 'error', message: String(err?.message ?? err) }))
+
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+
+  ipcMain.handle('updater:check', async () => {
+    if (!app.isPackaged) return { ok: false, reason: 'dev' }
+    try {
+      await autoUpdater.checkForUpdates()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) }
+    }
+  })
+
+  ipcMain.handle('updater:download', async () => {
+    if (!app.isPackaged) return { ok: false, reason: 'dev' }
+    try {
+      await autoUpdater.downloadUpdate()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) }
+    }
+  })
+
+  ipcMain.handle('updater:install', async () => {
+    if (!app.isPackaged) return { ok: false, reason: 'dev' }
+    // quitAndInstall will restart the app after update.
+    autoUpdater.quitAndInstall(false, true)
+    return { ok: true }
+  })
+}
+
 app.whenReady().then(() => {
   app.setName(APP_DISPLAY_NAME)
+  initAutoUpdater()
   createWindow()
 
   app.on('activate', () => {

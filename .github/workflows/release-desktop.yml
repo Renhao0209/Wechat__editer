@@ -123,6 +123,7 @@ jobs:
           artifacts: |
             release/*.exe
             release/*.exe.blockmap
+            release/latest.yml
 
       - name: Upload workflow artifacts (backup)
         if: always()
@@ -132,4 +133,5 @@ jobs:
           path: |
             release/*.exe
             release/*.exe.blockmap
+            release/latest.yml
           if-no-files-found: error

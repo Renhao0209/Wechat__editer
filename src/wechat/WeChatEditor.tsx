@@ -618,6 +618,93 @@ export default function WeChatEditor() {
     closeMoreMenu()
   }
 
+  async function handleCheckForUpdates() {
+    closeAllTopMenus()
+
+    if (!window.desktop?.updater) {
+      flash('仅桌面版支持检查更新')
+      return
+    }
+
+    let unsub: (() => void) | null = null
+    let waitingForDecision = false
+
+    const clearPersistentStatus = () => setStatus('')
+
+    unsub = window.desktop.updater.onStatus(async (payload) => {
+      if (payload.type === 'checking') {
+        flash('正在检查更新…')
+        return
+      }
+
+      if (payload.type === 'none') {
+        flash('已是最新版本')
+        unsub?.()
+        return
+      }
+
+      if (payload.type === 'available') {
+        if (waitingForDecision) return
+        waitingForDecision = true
+
+        const nextVer = (payload.info?.version as string | undefined) ?? ''
+        const ok = window.confirm(`发现新版本${nextVer ? `：${nextVer}` : ''}。\n\n是否下载并更新？`)
+        if (!ok) {
+          flash('已取消更新')
+          unsub?.()
+          return
+        }
+
+        const r = await window.desktop!.updater.download()
+        if (!r.ok) {
+          flash(`下载更新失败${r.error ? `：${r.error}` : ''}`)
+          unsub?.()
+        }
+        return
+      }
+
+      if (payload.type === 'progress') {
+        const p = typeof payload.progress?.percent === 'number' ? payload.progress.percent : undefined
+        if (typeof p === 'number' && Number.isFinite(p)) {
+          setStatus(`正在下载更新… ${Math.max(0, Math.min(100, Math.round(p)))}%`)
+        } else {
+          setStatus('正在下载更新…')
+        }
+        return
+      }
+
+      if (payload.type === 'downloaded') {
+        clearPersistentStatus()
+        const ok = window.confirm('更新已下载完成，是否立即安装并重启？')
+        if (!ok) {
+          flash('已下载更新（稍后可重新打开应用安装）')
+          unsub?.()
+          return
+        }
+        await window.desktop!.updater.install()
+        // App will quit/restart.
+        unsub?.()
+        return
+      }
+
+      if (payload.type === 'error') {
+        clearPersistentStatus()
+        flash(`检查更新失败：${payload.message}`)
+        unsub?.()
+      }
+    })
+
+    const res = await window.desktop.updater.check()
+    if (!res.ok) {
+      unsub?.()
+      if (res.reason === 'dev') {
+        flash('开发模式不支持自动更新')
+      } else {
+        flash(`检查更新失败${res.error ? `：${res.error}` : ''}`)
+      }
+    }
+  }
+
   useEffect(() => {
     function handlePointerDown(e: PointerEvent) {
       const topbar = topbarRef.current
@@ -1346,6 +1433,20 @@ export default function WeChatEditor() {
                   更多
                 </summary>
                 <div className="menu__panel" role="menu">
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      void handleCheckForUpdates()
+                    }}
+                  >
+                    检查更新
+                  </button>
+
+                  <div className="menu__sep" />
+
                   <button
                     type="button"
                     className="menu__item"

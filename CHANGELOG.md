@@ -6,15 +6,15 @@
 
 ### Added
 
-- 
+- 桌面版：更多菜单新增「检查更新」，支持从 GitHub Releases 检查/下载/安装更新。
 
 ### Changed
 
-- 
+- Windows 安装包命名调整为「WeChat Editor-<版本号>.exe」。
 
 ### Fixed
 
-- 
+- 修复「更多」下拉菜单在横向滚动容器内可能被裁剪的问题。
 
 ### Removed
 
