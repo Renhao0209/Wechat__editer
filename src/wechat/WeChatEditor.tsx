@@ -50,8 +50,10 @@ type ComponentUiCategory = Exclude<ComponentCategory, '分隔'>
 
 type SelectedComponentInstance = {
   componentId: string
-  from: number
-  to: number
+  from?: number
+  to?: number
+  sourceStart?: number
+  sourceEnd?: number
   values: Record<string, string>
 }
 
@@ -234,6 +236,27 @@ export default function WeChatEditor() {
   const turndown = useMemo(() => {
     const service = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' })
     service.keep(['img', 'span', 'div'])
+
+    // Preserve our component blocks as raw HTML so Markdown mode can still re-select/edit them.
+    service.addRule('keepWceComponents', {
+      filter: (node) => {
+        if (!(node instanceof HTMLElement)) return false
+
+        const tag = node.tagName.toLowerCase()
+        const cls = node.getAttribute('class') ?? ''
+        const wce = node.getAttribute('data-wce-component')
+
+        if (wce) return true
+        if (tag === 'blockquote' && (cls.includes('callout') || cls.includes('card'))) return true
+        if (tag === 'h2' && cls.includes('titlebar')) return true
+        return false
+      },
+      replacement: (_content, node) => {
+        if (!(node instanceof HTMLElement)) return ''
+        return `\n\n${node.outerHTML}\n\n`
+      },
+    })
+
     return service
   }, [])
 
@@ -323,6 +346,57 @@ export default function WeChatEditor() {
     } catch {
       return null
     }
+  }
+
+  const probeMarkdownComponentAtIndex = (text: string, index: number): SelectedComponentInstance | null => {
+    const clampIndex = Math.max(0, Math.min(index, text.length))
+
+    const lastBlockquote = text.lastIndexOf('<blockquote', clampIndex)
+    const lastH2 = text.lastIndexOf('<h2', clampIndex)
+    const start = Math.max(lastBlockquote, lastH2)
+    if (start < 0) return null
+
+    const isBlockquote = start === lastBlockquote
+    const tagClose = text.indexOf('>', start)
+    if (tagClose < 0) return null
+    const openTag = text.slice(start, tagClose + 1)
+
+    const closeTag = isBlockquote ? '</blockquote>' : '</h2>'
+    const closeIndex = text.indexOf(closeTag, tagClose + 1)
+    if (closeIndex < 0) return null
+    const end = closeIndex + closeTag.length
+    if (clampIndex < start || clampIndex > end) return null
+
+    const getAttr = (name: string): string => {
+      const re = new RegExp(`${name}="([^"]*)"`, 'i')
+      const m = re.exec(openTag)
+      return m?.[1] ?? ''
+    }
+
+    let componentId = getAttr('data-wce-component')
+    const rawProps = getAttr('data-wce-props')
+    const classAttr = getAttr('class')
+
+    if (!componentId) {
+      if (isBlockquote) {
+        if (classAttr.includes('card')) componentId = 'card'
+        else if (classAttr.includes('callout')) componentId = 'calloutInfo'
+      } else {
+        if (classAttr.includes('titlebar')) componentId = 'titlebarH2'
+      }
+    }
+
+    if (!componentId) return null
+
+    const target = COMPONENTS.find((c) => c.id === componentId)
+    if (!target?.config || !target.render) return null
+
+    const defaults = getDefaultComponentConfigValues(target.config)
+    const decoded = rawProps ? decodeComponentProps(rawProps) : null
+    const saved = readSavedComponentConfigValues(componentId) ?? {}
+    const values = { ...defaults, ...saved, ...(decoded ?? {}) }
+
+    return { componentId, sourceStart: start, sourceEnd: end, values }
   }
 
   const COMPONENT_CATEGORY_ORDER: ComponentUiCategory[] = useMemo(
@@ -673,6 +747,12 @@ export default function WeChatEditor() {
     flash('已切换：富文本')
   }
 
+  function handleMarkdownCursorProbe(cursorIndex: number) {
+    const found = probeMarkdownComponentAtIndex(markdownText, cursorIndex)
+    setSelectedComponent(found)
+    if (found) setLibraryTab('props')
+  }
+
   function handleMarkdownChange(next: string) {
     setMarkdownText(next)
     isMarkdownTypingRef.current = true
@@ -919,12 +999,35 @@ export default function WeChatEditor() {
 
     writeSavedComponentConfigValues(c.id, componentPropsValues)
     const rendered = c.render(componentPropsValues)
-    const range = { from: selectedComponent.from, to: selectedComponent.to }
-    if ('content' in rendered) {
-      editor.chain().focus().insertContentAt(range, rendered.content).run()
-    } else {
-      editor.chain().focus().insertContentAt(range, rendered.html).run()
+
+    if (editorFormat === 'markdown') {
+      const start = selectedComponent.sourceStart
+      const end = selectedComponent.sourceEnd
+      if (typeof start !== 'number' || typeof end !== 'number') {
+        flash('Markdown 模式：请把光标放在组件 HTML 块内再应用')
+        return
+      }
+
+      if (!('html' in rendered)) {
+        flash('该组件暂不支持 Markdown 源码应用')
+        return
+      }
+
+      const html = rendered.html.replace(/<p><\/p>\s*$/i, '').trim()
+      const nextText = `${markdownText.slice(0, start)}${html}\n\n${markdownText.slice(end)}`
+      handleMarkdownChange(nextText)
+      flash(`已更新组件：${c.name}`)
+      return
     }
+
+    if (typeof selectedComponent.from !== 'number' || typeof selectedComponent.to !== 'number') {
+      flash('未选中可编辑组件：请先在正文中点一下组件块')
+      return
+    }
+
+    const range = { from: selectedComponent.from, to: selectedComponent.to }
+    if ('content' in rendered) editor.chain().focus().insertContentAt(range, rendered.content).run()
+    else editor.chain().focus().insertContentAt(range, rendered.html).run()
     flash(`已更新组件：${c.name}`)
   }
 
@@ -2128,6 +2231,16 @@ export default function WeChatEditor() {
                   ref={markdownScrollRef}
                   value={markdownText}
                   onChange={(e) => handleMarkdownChange(e.target.value)}
+                  onClick={(e) => {
+                    const idx = (e.currentTarget as HTMLTextAreaElement).selectionStart ?? 0
+                    handleMarkdownCursorProbe(idx)
+                  }}
+                  onKeyUp={(e) => {
+                    const key = e.key
+                    if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'ArrowLeft' && key !== 'ArrowRight') return
+                    const idx = (e.currentTarget as HTMLTextAreaElement).selectionStart ?? 0
+                    handleMarkdownCursorProbe(idx)
+                  }}
                   placeholder={'# 标题\n\n在这里用 Markdown 写作…\n\n也可以直接写 HTML（会原样渲染）。'}
                 />
               ) : editor ? (
@@ -2152,7 +2265,35 @@ export default function WeChatEditor() {
               <div className="wechatPreviewScope">
                 <style>{previewScopedCss}</style>
                 <article className="wechat-article" data-theme={theme}>
-                  <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                  <div
+                    onClick={(e) => {
+                      if (editorFormat !== 'markdown') return
+                      const target = e.target as HTMLElement | null
+                      if (!target) return
+                      const el = target.closest?.('[data-wce-component], blockquote.callout, blockquote.card, h2.titlebar') as
+                        | HTMLElement
+                        | null
+                      if (!el) return
+
+                      // In Markdown mode, editing is driven by the source HTML block.
+                      // If current Markdown doesn't preserve component HTML, prompt user to switch to rich or re-insert.
+                      const wce = el.getAttribute('data-wce-component')
+                      if (!wce) {
+                        flash('Markdown 模式：该内容不是组件 HTML（可能已转换为普通引用）。建议切回富文本后重新插入组件。')
+                        return
+                      }
+
+                      const rawProps = el.getAttribute('data-wce-props') ?? ''
+                      const idx = rawProps ? markdownText.indexOf(`data-wce-props=\"${rawProps}\"`) : -1
+                      if (idx >= 0) {
+                        handleMarkdownCursorProbe(idx)
+                      } else {
+                        flash('Markdown 模式：请在左侧源码中把光标放到该组件 HTML 块内，再点「属性」编辑')
+                        setLibraryTab('props')
+                      }
+                    }}
+                    dangerouslySetInnerHTML={{ __html: previewHtml }}
+                  />
                 </article>
               </div>
             </div>
