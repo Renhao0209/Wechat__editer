@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { NodeSelection } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import TextAlign from '@tiptap/extension-text-align'
@@ -423,6 +424,43 @@ export default function WeChatEditor() {
     editorProps: {
       attributes: {
         class: 'wechatEditor__prose',
+      },
+      handleClick: (view, pos) => {
+        const $pos = view.state.doc.resolve(pos)
+        let componentDepth: number | null = null
+        let componentId = ''
+        for (let depth = $pos.depth; depth >= 0; depth--) {
+          const node = $pos.node(depth)
+          const attrs = (node?.attrs ?? {}) as Record<string, unknown>
+          const nodeTypeName = node?.type?.name ?? ''
+          const cls = typeof attrs.class === 'string' ? (attrs.class as string) : ''
+
+          componentId = typeof attrs.wceComponent === 'string' ? (attrs.wceComponent as string) : ''
+          if (!componentId) {
+            if (nodeTypeName === 'blockquote') {
+              if (cls.includes('card')) componentId = 'card'
+              else if (cls.includes('callout')) componentId = 'calloutInfo'
+            } else if (nodeTypeName === 'heading') {
+              const level = typeof attrs.level === 'number' ? (attrs.level as number) : undefined
+              if (level === 2 && cls.includes('titlebar')) componentId = 'titlebarH2'
+            }
+          }
+
+          if (!componentId) continue
+          const target = COMPONENTS.find((c) => c.id === componentId)
+          if (!target?.config || !target.render) continue
+
+          componentDepth = depth
+          break
+        }
+
+        if (componentDepth === null || componentDepth <= 0) return false
+
+        const nodePos = $pos.before(componentDepth)
+        const tr = view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos))
+        view.dispatch(tr)
+        setLibraryTab('props')
+        return true
       },
     },
     onUpdate: ({ editor: next }) => {

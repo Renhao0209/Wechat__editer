@@ -809,6 +809,27 @@
   border-color: rgba(34, 197, 94, 0.28);
 }
 
+/* Selectable component blocks (click anywhere to select whole block) */
+.wechatEditor__prose blockquote.callout,
+.wechatEditor__prose blockquote.card,
+.wechatEditor__prose h2.titlebar {
+  cursor: pointer;
+  transition: box-shadow 120ms ease, outline-color 120ms ease;
+}
+
+.wechatEditor__prose blockquote.callout:hover,
+.wechatEditor__prose blockquote.card:hover,
+.wechatEditor__prose h2.titlebar:hover {
+  box-shadow: 0 10px 24px rgba(11, 87, 208, 0.10);
+}
+
+.wechatEditor__prose blockquote.callout.ProseMirror-selectednode,
+.wechatEditor__prose blockquote.card.ProseMirror-selectednode,
+.wechatEditor__prose h2.titlebar.ProseMirror-selectednode {
+  outline: 2px solid rgba(11, 87, 208, 0.35);
+  outline-offset: 2px;
+}
+
 .wechatEditor__prose p.card__title,
 .wechatEditor__prose p.guide__kicker {
   margin-top: 0;
