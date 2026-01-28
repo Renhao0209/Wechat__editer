@@ -154,6 +154,18 @@ export function getWeChatBaseCss(): string {
   color: rgba(0, 0, 0, 0.40);
 }
 
+.wechat-article p.divider--lantern {
+  letter-spacing: 8px;
+  font-size: 16px;
+}
+
+.wechat-article p.divider--lantern.divider--c-red { color: #d11a2a; }
+.wechat-article p.divider--lantern.divider--c-gold { color: #b7791f; }
+.wechat-article p.divider--lantern.divider--c-purple { color: #6d28d9; }
+.wechat-article p.divider--lantern.divider--c-green { color: #0f766e; }
+.wechat-article p.divider--lantern.divider--c-blue { color: #1d4ed8; }
+.wechat-article p.divider--lantern.divider--c-gray { color: rgba(0,0,0,0.45); }
+
 .wechat-article h2.section {
   position: relative;
   padding: 10px 12px;

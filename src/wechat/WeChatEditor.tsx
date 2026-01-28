@@ -18,7 +18,7 @@ import {
 } from './wechatStyles'
 import { BUILT_IN_THEMES } from './themes/builtInThemes'
 import { COMPONENTS } from './library/components'
-import type { ComponentCategory } from './library/types'
+import type { ComponentCategory, ComponentConfigSchema, ComponentItem } from './library/types'
 import { LAYOUT_PRESETS } from './library/layoutPresets'
 import { TEMPLATES } from './library/templates'
 import { buildInlinedWeChatArticleHtml } from './inlineWeChat'
@@ -32,6 +32,7 @@ const STORAGE_KEY = 'wechatedit:html'
 const STORAGE_THEME_KEY = 'wechatedit:theme'
 const STORAGE_CUSTOM_THEMES_KEY = 'wechatedit:customThemes'
 const STORAGE_VIEW_KEY = 'wechatedit:view'
+const STORAGE_COMPONENT_CONFIGS_KEY = 'wechatedit:componentConfigs'
 
 type ViewMode = 'split' | 'edit' | 'preview'
 
@@ -63,6 +64,24 @@ function safeReadLocalStorage(key: string): string | null {
 function safeWriteLocalStorage(key: string, value: string): void {
   try {
     localStorage.setItem(key, value)
+  } catch {
+    // ignore
+  }
+}
+
+function safeReadJson<T>(key: string, fallback: T): T {
+  const raw = safeReadLocalStorage(key)
+  if (!raw) return fallback
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+function safeWriteJson(key: string, value: unknown): void {
+  try {
+    safeWriteLocalStorage(key, JSON.stringify(value))
   } catch {
     // ignore
   }
@@ -194,6 +213,13 @@ export default function WeChatEditor() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const editorScrollRef = useRef<HTMLDivElement | null>(null)
+  const previewScrollRef = useRef<HTMLDivElement | null>(null)
+  const isSyncingScrollRef = useRef(false)
+
+  const [isComponentConfigOpen, setIsComponentConfigOpen] = useState(false)
+  const [componentConfigTargetId, setComponentConfigTargetId] = useState<string | null>(null)
+  const [componentConfigValues, setComponentConfigValues] = useState<Record<string, string>>({})
 
   const initialHtml = useMemo(() => {
     const saved = safeReadLocalStorage(STORAGE_KEY)
@@ -226,6 +252,30 @@ export default function WeChatEditor() {
 
   const [componentCategory, setComponentCategory] = useState<ComponentUiCategory | 'all'>('all')
   const [componentQuery, setComponentQuery] = useState('')
+
+  const componentConfigTarget: ComponentItem | undefined = useMemo(() => {
+    if (!componentConfigTargetId) return undefined
+    return COMPONENTS.find((x) => x.id === componentConfigTargetId)
+  }, [componentConfigTargetId])
+
+  const getDefaultComponentConfigValues = (schema: ComponentConfigSchema): Record<string, string> => {
+    const out: Record<string, string> = {}
+    for (const f of schema.fields) {
+      out[f.key] = f.default ?? ''
+    }
+    return out
+  }
+
+  const readSavedComponentConfigValues = (componentId: string): Record<string, string> | null => {
+    const map = safeReadJson<Record<string, Record<string, string>>>(STORAGE_COMPONENT_CONFIGS_KEY, {})
+    return map[componentId] ?? null
+  }
+
+  const writeSavedComponentConfigValues = (componentId: string, values: Record<string, string>): void => {
+    const map = safeReadJson<Record<string, Record<string, string>>>(STORAGE_COMPONENT_CONFIGS_KEY, {})
+    map[componentId] = values
+    safeWriteJson(STORAGE_COMPONENT_CONFIGS_KEY, map)
+  }
 
   const filteredComponents = useMemo(() => {
     const q = componentQuery.trim().toLowerCase()
@@ -293,6 +343,46 @@ export default function WeChatEditor() {
   useEffect(() => {
     safeWriteLocalStorage(STORAGE_CUSTOM_THEMES_KEY, JSON.stringify(customThemes))
   }, [customThemes])
+
+  useEffect(() => {
+    const editorEl = editorScrollRef.current
+    const previewEl = previewScrollRef.current
+    if (!editorEl || !previewEl) return
+
+    let rafId: number | null = null
+
+    const syncFromEditor = () => {
+      if (isSyncingScrollRef.current) return
+      if (rafId !== null) return
+
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null
+        const maxEditor = editorEl.scrollHeight - editorEl.clientHeight
+        const maxPreview = previewEl.scrollHeight - previewEl.clientHeight
+        if (maxEditor <= 0 || maxPreview <= 0) {
+          isSyncingScrollRef.current = true
+          previewEl.scrollTop = 0
+          isSyncingScrollRef.current = false
+          return
+        }
+
+        const ratio = editorEl.scrollTop / maxEditor
+        isSyncingScrollRef.current = true
+        previewEl.scrollTop = ratio * maxPreview
+        isSyncingScrollRef.current = false
+      })
+    }
+
+    editorEl.addEventListener('scroll', syncFromEditor, { passive: true })
+
+    // Initial sync (e.g., after switching view mode)
+    syncFromEditor()
+
+    return () => {
+      editorEl.removeEventListener('scroll', syncFromEditor)
+      if (rafId !== null) window.cancelAnimationFrame(rafId)
+    }
+  }, [viewMode])
 
   const selectedCustomTheme = useMemo(() => {
     if (!theme.startsWith('custom:')) return undefined
@@ -404,11 +494,39 @@ export default function WeChatEditor() {
     if (!ensureEditor()) return
     const c = COMPONENTS.find((x) => x.id === componentId)
     if (!c) return
+
+    if (c.config && c.render) {
+      const saved = readSavedComponentConfigValues(c.id)
+      const defaults = getDefaultComponentConfigValues(c.config)
+      setComponentConfigTargetId(c.id)
+      setComponentConfigValues({ ...defaults, ...(saved ?? {}) })
+      setIsComponentConfigOpen(true)
+      return
+    }
+
     if (c.content) {
       editor.chain().focus().insertContent(c.content).run()
     } else if (c.html) {
       editor.chain().focus().insertContent(c.html).run()
     }
+    flash(`已插入：${c.name}`)
+  }
+
+  function handleConfirmInsertConfiguredComponent() {
+    if (!ensureEditor()) return
+    const c = componentConfigTarget
+    if (!c || !c.config || !c.render) return
+
+    writeSavedComponentConfigValues(c.id, componentConfigValues)
+    const rendered = c.render(componentConfigValues)
+    if ('content' in rendered) {
+      editor.chain().focus().insertContent(rendered.content).run()
+    } else {
+      editor.chain().focus().insertContent(rendered.html).run()
+    }
+    setIsComponentConfigOpen(false)
+    setComponentConfigTargetId(null)
+    setComponentConfigValues({})
     flash(`已插入：${c.name}`)
   }
 
@@ -1077,7 +1195,7 @@ export default function WeChatEditor() {
           </div>
 
           <div className="wechatPanelBody">
-            <div className="wechatEditorWrap">
+            <div className="wechatEditorWrap" ref={editorScrollRef}>
               {editor ? <EditorContent editor={editor} /> : <div className="loading">加载编辑器…</div>}
             </div>
 
@@ -1208,7 +1326,7 @@ export default function WeChatEditor() {
         <aside className="wechatPreview">
           <div className="phone">
             <div className="phone__top">公众号预览</div>
-            <div className="phone__screen">
+            <div className="phone__screen" ref={previewScrollRef}>
               <div className="wechatPreviewScope">
                 <style>{previewScopedCss}</style>
                 <article className="wechat-article" data-theme={theme}>
@@ -1293,6 +1411,74 @@ export default function WeChatEditor() {
               </button>
               <button className="btn" onClick={handleApplyThemeCssImport}>
                 导入主题
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isComponentConfigOpen && componentConfigTarget?.config && (
+        <div className="modalOverlay" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal__title">
+              {componentConfigTarget.config.title ?? `插入组件：${componentConfigTarget.name}`}
+            </div>
+            <div className="modal__desc">
+              {componentConfigTarget.config.desc ?? '调整参数后点击“插入”。参数会自动记住下次使用。'}
+            </div>
+
+            {componentConfigTarget.config.fields.map((f) => (
+              <label key={f.key} className="modal__field">
+                <div className="modal__label">{f.label}</div>
+                {f.type === 'select' ? (
+                  <select
+                    className="modal__input"
+                    value={componentConfigValues[f.key] ?? ''}
+                    onChange={(e) =>
+                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                    }
+                  >
+                    {(f.options ?? []).map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.type === 'color' ? (
+                  <input
+                    className="modal__input"
+                    type="color"
+                    value={componentConfigValues[f.key] ?? f.default ?? '#000000'}
+                    onChange={(e) =>
+                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                    }
+                  />
+                ) : (
+                  <input
+                    className="modal__input"
+                    value={componentConfigValues[f.key] ?? ''}
+                    placeholder={f.placeholder}
+                    onChange={(e) =>
+                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
+                    }
+                  />
+                )}
+              </label>
+            ))}
+
+            <div className="modal__actions">
+              <button
+                className="btn btn--ghost"
+                onClick={() => {
+                  setIsComponentConfigOpen(false)
+                  setComponentConfigTargetId(null)
+                  setComponentConfigValues({})
+                }}
+              >
+                取消
+              </button>
+              <button className="btn" onClick={handleConfirmInsertConfiguredComponent}>
+                插入
               </button>
             </div>
           </div>

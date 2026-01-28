@@ -6,6 +6,30 @@ export type TemplateItem = {
 
 export type ComponentCategory = '标题' | '卡片' | '引用' | '分隔' | '分割线' | '清单' | '图片'
 
+export type ComponentConfigFieldType = 'text' | 'color' | 'select'
+
+export type ComponentConfigField = {
+  key: string
+  label: string
+  type: ComponentConfigFieldType
+  default?: string
+  placeholder?: string
+  options?: Array<{ label: string; value: string }>
+}
+
+export type ComponentConfigSchema = {
+  title?: string
+  desc?: string
+  fields: ComponentConfigField[]
+}
+
+export type ComponentRenderResult =
+  | { html: string }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  | { content: any }
+
+export type ComponentRenderer = (values: Record<string, string>) => ComponentRenderResult
+
 export type ComponentItem = {
   id: string
   name: string
@@ -15,6 +39,10 @@ export type ComponentItem = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   content?: any
   category: ComponentCategory
+
+  // Optional: configurable component (show form on insert, then render HTML/content).
+  config?: ComponentConfigSchema
+  render?: ComponentRenderer
 }
 
 export type LayoutPreset = {
