@@ -1,5 +1,5 @@
 const path = require('node:path')
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, Menu } = require('electron')
 
 const APP_DISPLAY_NAME = '微信排版助手'
 
@@ -20,12 +20,22 @@ function createWindow() {
     backgroundColor: '#f6f7f9',
     title: APP_DISPLAY_NAME,
     icon: getAppIconPath(),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   })
+
+  // Hide the default Windows menu bar (File/Edit/View/...). We'll render an in-app menubar.
+  try {
+    Menu.setApplicationMenu(null)
+    win.setMenuBarVisibility(false)
+    win.removeMenu()
+  } catch {
+    // ignore
+  }
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL
 

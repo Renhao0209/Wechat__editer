@@ -241,6 +241,11 @@ export default function WeChatEditor() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const fileMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const editMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const viewMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const helpMenuRef = useRef<HTMLDetailsElement | null>(null)
+  const topbarRef = useRef<HTMLElement | null>(null)
   const editorScrollRef = useRef<HTMLDivElement | null>(null)
   const markdownScrollRef = useRef<HTMLTextAreaElement | null>(null)
   const previewScrollRef = useRef<HTMLDivElement | null>(null)
@@ -585,6 +590,55 @@ export default function WeChatEditor() {
   function closeMoreMenu() {
     if (moreMenuRef.current) moreMenuRef.current.open = false
   }
+
+  function handleMenuToggle(active: React.RefObject<HTMLDetailsElement | null>) {
+    if (!active.current?.open) return
+    const all: Array<React.RefObject<HTMLDetailsElement | null>> = [
+      fileMenuRef,
+      editMenuRef,
+      viewMenuRef,
+      helpMenuRef,
+      moreMenuRef,
+    ]
+    for (const ref of all) {
+      if (ref === active) continue
+      if (ref.current) ref.current.open = false
+    }
+  }
+
+  function closeMenu(ref: React.RefObject<HTMLDetailsElement | null>) {
+    if (ref.current) ref.current.open = false
+  }
+
+  function closeAllTopMenus() {
+    closeMenu(fileMenuRef)
+    closeMenu(editMenuRef)
+    closeMenu(viewMenuRef)
+    closeMenu(helpMenuRef)
+    closeMoreMenu()
+  }
+
+  useEffect(() => {
+    function handlePointerDown(e: PointerEvent) {
+      const topbar = topbarRef.current
+      if (!topbar) return
+      const target = e.target
+      if (!(target instanceof Node)) return
+      if (topbar.contains(target)) return
+      closeAllTopMenus()
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') closeAllTopMenus()
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown, { capture: true })
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, { capture: true })
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [])
 
   async function handleCopyFullHtml() {
     const ok = await copyToClipboard(exportFullHtml)
@@ -980,14 +1034,241 @@ export default function WeChatEditor() {
 
   return (
     <div className="wechatShell">
-      <header className="wechatTopbar">
+      <header className="wechatTopbar" ref={topbarRef}>
         <div className="wechatTopbar__left">
-          <div className="wechatBrand">
-            <div className="wechatBrand__title">公众号编辑器（MVP）</div>
-            <div className="wechatBrand__meta">字数：{charCount}</div>
-          </div>
+          <div className="wechatTopbar__primary">
+            <div className="wechatBrand">
+              <div className="wechatBrand__title">公众号编辑器</div>
+              <div className="wechatBrand__meta">字数：{charCount}</div>
+            </div>
 
-          <div className="wechatSeg" role="group" aria-label="视图">
+            <nav className="wechatMenubar" aria-label="菜单栏">
+            <details className="menu menu--left wechatMenu" ref={fileMenuRef} onToggle={() => handleMenuToggle(fileMenuRef)}>
+              <summary className="wechatMenu__trigger">文件</summary>
+              <div className="menu__panel" role="menu">
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(fileMenuRef)
+                    if (!ensureEditor()) return
+                    const ok = window.confirm('重置为示例内容？当前内容会被覆盖。')
+                    if (!ok) return
+                    editor.commands.setContent(DEFAULT_CONTENT)
+                    safeWriteLocalStorage(STORAGE_KEY, DEFAULT_CONTENT)
+                    setCurrentHtml(DEFAULT_CONTENT)
+                    flash('已重置内容')
+                  }}
+                >
+                  新建/重置
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(fileMenuRef)
+                    setIsImportOpen(true)
+                  }}
+                >
+                  导入 HTML…
+                </button>
+                <div className="menu__sep" />
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(fileMenuRef)
+                    handleDownloadHtml()
+                  }}
+                >
+                  导出 HTML
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(fileMenuRef)
+                    handleDownloadInlinedHtml()
+                  }}
+                >
+                  导出（内联）HTML
+                </button>
+              </div>
+            </details>
+
+            <details className="menu menu--left wechatMenu" ref={editMenuRef} onToggle={() => handleMenuToggle(editMenuRef)}>
+              <summary className="wechatMenu__trigger">编辑</summary>
+              <div className="menu__panel" role="menu">
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(editMenuRef)
+                    editor?.chain().focus().undo().run()
+                  }}
+                >
+                  撤销
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(editMenuRef)
+                    editor?.chain().focus().redo().run()
+                  }}
+                >
+                  重做
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(editMenuRef)
+                    editor?.chain().focus().unsetAllMarks().clearNodes().run()
+                  }}
+                >
+                  清除格式
+                </button>
+                <div className="menu__sep" />
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(editMenuRef)
+                    void handleCopyRich()
+                  }}
+                >
+                  复制富文本
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(editMenuRef)
+                    void handleCopyInlinedHtml()
+                  }}
+                >
+                  复制内联 HTML
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(editMenuRef)
+                    void handleCopyFullHtml()
+                  }}
+                >
+                  复制完整 HTML
+                </button>
+              </div>
+            </details>
+
+            <details className="menu menu--left wechatMenu" ref={viewMenuRef} onToggle={() => handleMenuToggle(viewMenuRef)}>
+              <summary className="wechatMenu__trigger">视图</summary>
+              <div className="menu__panel" role="menu">
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(viewMenuRef)
+                    setViewMode('edit')
+                  }}
+                >
+                  编辑（仅编辑）
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(viewMenuRef)
+                    setViewMode('split')
+                  }}
+                >
+                  分屏（编辑+预览）
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(viewMenuRef)
+                    setViewMode('preview')
+                  }}
+                >
+                  预览（仅预览）
+                </button>
+                <div className="menu__sep" />
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(viewMenuRef)
+                    if (editorFormat === 'rich') return
+                    handleSwitchToRich()
+                  }}
+                >
+                  富文本模式
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(viewMenuRef)
+                    if (editorFormat === 'markdown') return
+                    handleSwitchToMarkdown()
+                  }}
+                >
+                  Markdown 模式
+                </button>
+              </div>
+            </details>
+
+            <details className="menu menu--left wechatMenu" ref={helpMenuRef} onToggle={() => handleMenuToggle(helpMenuRef)}>
+              <summary className="wechatMenu__trigger">帮助</summary>
+              <div className="menu__panel" role="menu">
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(helpMenuRef)
+                    window.open('https://github.com/Renhao0209/Wechat__editer/releases', '_blank')
+                  }}
+                >
+                  打开 Releases（下载桌面版）
+                </button>
+                <button
+                  type="button"
+                  className="menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu(helpMenuRef)
+                    window.open('https://github.com/Renhao0209/Wechat__editer', '_blank')
+                  }}
+                >
+                  打开 GitHub 仓库
+                </button>
+              </div>
+            </details>
+
+            <button type="button" className="wechatMenu__spacer" aria-label="关闭菜单" onClick={closeAllTopMenus} />
+            </nav>
+
+            <div className="wechatSeg" role="group" aria-label="视图">
             <button
               type="button"
               className={`wechatSeg__btn ${viewMode === 'edit' ? 'is-active' : ''}`}
@@ -1017,7 +1298,7 @@ export default function WeChatEditor() {
             </button>
           </div>
 
-          <div className="wechatSeg" role="group" aria-label="编辑格式">
+            <div className="wechatSeg" role="group" aria-label="编辑格式">
             <button
               type="button"
               className={`wechatSeg__btn ${editorFormat === 'rich' ? 'is-active' : ''}`}
@@ -1037,6 +1318,166 @@ export default function WeChatEditor() {
               Markdown
             </button>
           </div>
+
+            <div className="wechatTopbar__actions" aria-label="快捷操作">
+              <div className="wechatTopbar__actionsRow" aria-label="复制操作">
+                <button
+                  className="btn"
+                  onClick={() => {
+                    closeAllTopMenus()
+                    void handleCopyRich()
+                  }}
+                >
+                  复制富文本
+                </button>
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => {
+                    closeAllTopMenus()
+                    void handleCopyInlinedHtml()
+                  }}
+                >
+                  复制内联HTML
+                </button>
+              </div>
+
+              <details className="menu wechatMenu" ref={moreMenuRef} onToggle={() => handleMenuToggle(moreMenuRef)}>
+                <summary className="wechatMenu__trigger wechatMenu__trigger--button" aria-label="更多操作">
+                  更多
+                </summary>
+                <div className="menu__panel" role="menu">
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      void handleCopyFullHtml()
+                    }}
+                  >
+                    复制完整 HTML
+                  </button>
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      void handleCopyBodyHtml()
+                    }}
+                  >
+                    复制文章 HTML
+                  </button>
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      void handleCopyCss()
+                    }}
+                  >
+                    复制 CSS
+                  </button>
+
+                  <div className="menu__sep" />
+
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      handleDownloadHtml()
+                    }}
+                  >
+                    导出 HTML
+                  </button>
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      handleDownloadInlinedHtml()
+                    }}
+                  >
+                    导出内联HTML
+                  </button>
+
+                  <div className="menu__sep" />
+
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      handleOpenImport()
+                    }}
+                  >
+                    导入 HTML
+                  </button>
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      handleOpenThemeImport()
+                    }}
+                  >
+                    导入JSON主题
+                  </button>
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      handleOpenThemeCssImport()
+                    }}
+                  >
+                    导入CSS主题
+                  </button>
+
+                  {theme.startsWith('custom:') && (
+                    <>
+                      <div className="menu__sep" />
+                      <button
+                        type="button"
+                        className="menu__item menu__item--danger"
+                        role="menuitem"
+                        onClick={() => {
+                          closeMoreMenu()
+                          handleDeleteCurrentCustomTheme()
+                        }}
+                      >
+                        删除当前自定义主题
+                      </button>
+                    </>
+                  )}
+
+                  <div className="menu__sep" />
+
+                  <button
+                    type="button"
+                    className="menu__item menu__item--danger"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
+                      handleClear()
+                    }}
+                  >
+                    清空内容
+                  </button>
+                </div>
+              </details>
+            </div>
+
+          </div>
+
+          <div className="wechatTopbar__secondary">
 
           <label className="wechatField">
             <span>主题</span>
@@ -1072,148 +1513,11 @@ export default function WeChatEditor() {
           <div className="wechatStatus" aria-live="polite">
             {status}
           </div>
+
+          </div>
         </div>
 
-        <div className="wechatTopbar__right">
-          <button className="btn" onClick={handleCopyRich}>
-            复制富文本
-          </button>
-          <button className="btn btn--ghost" onClick={handleCopyInlinedHtml}>
-            复制内联HTML
-          </button>
-          <details className="menu" ref={moreMenuRef}>
-            <summary className="btn btn--ghost" aria-label="更多操作">
-              更多
-            </summary>
-            <div className="menu__panel" role="menu">
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  void handleCopyFullHtml()
-                }}
-              >
-                复制完整 HTML
-              </button>
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  void handleCopyBodyHtml()
-                }}
-              >
-                复制文章 HTML
-              </button>
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  void handleCopyCss()
-                }}
-              >
-                复制 CSS
-              </button>
-
-              <div className="menu__sep" />
-
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  handleDownloadHtml()
-                }}
-              >
-                导出 HTML
-              </button>
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  handleDownloadInlinedHtml()
-                }}
-              >
-                导出内联HTML
-              </button>
-
-              <div className="menu__sep" />
-
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  handleOpenImport()
-                }}
-              >
-                导入 HTML
-              </button>
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  handleOpenThemeImport()
-                }}
-              >
-                导入JSON主题
-              </button>
-              <button
-                type="button"
-                className="menu__item"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  handleOpenThemeCssImport()
-                }}
-              >
-                导入CSS主题
-              </button>
-
-              {theme.startsWith('custom:') && (
-                <>
-                  <div className="menu__sep" />
-                  <button
-                    type="button"
-                    className="menu__item menu__item--danger"
-                    role="menuitem"
-                    onClick={() => {
-                      closeMoreMenu()
-                      handleDeleteCurrentCustomTheme()
-                    }}
-                  >
-                    删除当前自定义主题
-                  </button>
-                </>
-              )}
-
-              <div className="menu__sep" />
-
-              <button
-                type="button"
-                className="menu__item menu__item--danger"
-                role="menuitem"
-                onClick={() => {
-                  closeMoreMenu()
-                  handleClear()
-                }}
-              >
-                清空内容
-              </button>
-            </div>
-          </details>
-        </div>
+        
       </header>
 
       <main className={`wechatMain wechatMain--${viewMode}`}>
