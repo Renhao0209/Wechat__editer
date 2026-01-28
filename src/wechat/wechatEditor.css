@@ -244,6 +244,68 @@
   padding: 8px 8px 10px;
 }
 
+.wechatLibrary__tools {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px;
+  margin: 0 0 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+}
+
+.wechatLibrary__search {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 9px 10px;
+  font-size: 12px;
+  outline: none;
+  background: #fff;
+}
+
+.wechatLibrary__search:focus {
+  border-color: rgba(11, 87, 208, 0.35);
+  box-shadow: 0 0 0 3px rgba(11, 87, 208, 0.10);
+}
+
+.wechatLibrary__cats {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  overflow: auto;
+  padding-bottom: 2px;
+}
+
+.wechatPill {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.wechatPill:hover {
+  border-color: rgba(0, 0, 0, 0.22);
+}
+
+.wechatPill.is-active {
+  border-color: rgba(11, 87, 208, 0.35);
+  background: rgba(11, 87, 208, 0.08);
+  color: rgba(11, 87, 208, 0.95);
+}
+
+.wechatLibrary__empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+}
+
 .wechatLibrary__group {
   padding: 8px;
   border-radius: 14px;

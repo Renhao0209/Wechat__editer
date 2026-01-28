@@ -18,6 +18,7 @@ import {
 } from './wechatStyles'
 import { BUILT_IN_THEMES } from './themes/builtInThemes'
 import { COMPONENTS } from './library/components'
+import type { ComponentCategory } from './library/types'
 import { LAYOUT_PRESETS } from './library/layoutPresets'
 import { TEMPLATES } from './library/templates'
 import { buildInlinedWeChatArticleHtml } from './inlineWeChat'
@@ -200,6 +201,39 @@ export default function WeChatEditor() {
   const [currentHtml, setCurrentHtml] = useState<string>(initialHtml)
 
   const [libraryTab, setLibraryTab] = useState<'components' | 'layouts'>('components')
+
+  const COMPONENT_CATEGORY_ORDER: ComponentCategory[] = useMemo(
+    () => ['标题', '卡片', '引用', '分隔', '清单', '图片'],
+    [],
+  )
+
+  const COMPONENT_CATEGORY_LABEL: Record<ComponentCategory, string> = useMemo(
+    () => ({
+      标题: '标题',
+      卡片: '内容框',
+      引用: '引用',
+      分隔: '分割线',
+      清单: '清单',
+      图片: '图片',
+    }),
+    [],
+  )
+
+  const [componentCategory, setComponentCategory] = useState<ComponentCategory | 'all'>('all')
+  const [componentQuery, setComponentQuery] = useState('')
+
+  const filteredComponents = useMemo(() => {
+    const q = componentQuery.trim().toLowerCase()
+    return COMPONENTS.filter((c) => {
+      if (componentCategory !== 'all' && c.category !== componentCategory) return false
+      if (!q) return true
+      return (
+        c.name.toLowerCase().includes(q) ||
+        (c.desc ? c.desc.toLowerCase().includes(q) : false) ||
+        c.id.toLowerCase().includes(q)
+      )
+    })
+  }, [componentCategory, componentQuery])
 
   const editor = useEditor({
     extensions: [
@@ -1067,25 +1101,65 @@ export default function WeChatEditor() {
               {libraryTab === 'components' && (
                 <div className="wechatLibrary__panel" role="tabpanel">
                   <div className="wechatLibrary__hint">点击即可插入到光标位置</div>
-                  {(['标题', '卡片', '引用', '分隔', '清单', '图片'] as const).map((cat) => (
-                    <div key={cat} className="wechatLibrary__group">
-                      <div className="wechatLibrary__groupTitle">{cat}</div>
-                      <div className="wechatLibrary__grid">
-                        {COMPONENTS.filter((c) => c.category === cat).map((c) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            className="wechatCardBtn"
-                            onClick={() => handleInsertComponent(c.id)}
-                            title={c.desc ?? c.name}
-                          >
-                            <div className="wechatCardBtn__title">{c.name}</div>
-                            {c.desc && <div className="wechatCardBtn__desc">{c.desc}</div>}
-                          </button>
-                        ))}
-                      </div>
+                  <div className="wechatLibrary__tools" aria-label="组件筛选">
+                    <input
+                      className="wechatLibrary__search"
+                      value={componentQuery}
+                      onChange={(e) => setComponentQuery(e.target.value)}
+                      placeholder="搜索组件（名称/描述/ID）"
+                    />
+
+                    <div className="wechatLibrary__cats" role="group" aria-label="组件分类">
+                      <button
+                        type="button"
+                        className={`wechatPill ${componentCategory === 'all' ? 'is-active' : ''}`}
+                        onClick={() => setComponentCategory('all')}
+                      >
+                        全部
+                      </button>
+                      {COMPONENT_CATEGORY_ORDER.map((cat) => (
+                        <button
+                          key={cat}
+                          type="button"
+                          className={`wechatPill ${componentCategory === cat ? 'is-active' : ''}`}
+                          onClick={() => setComponentCategory(cat)}
+                        >
+                          {COMPONENT_CATEGORY_LABEL[cat]}
+                        </button>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+
+                  {filteredComponents.length === 0 ? (
+                    <div className="wechatLibrary__empty">没有匹配的组件</div>
+                  ) : (
+                    (componentCategory === 'all'
+                      ? COMPONENT_CATEGORY_ORDER
+                      : [componentCategory as ComponentCategory]
+                    ).map((cat) => {
+                      const list = filteredComponents.filter((c) => c.category === cat)
+                      if (list.length === 0) return null
+                      return (
+                        <div key={cat} className="wechatLibrary__group">
+                          <div className="wechatLibrary__groupTitle">{COMPONENT_CATEGORY_LABEL[cat]}</div>
+                          <div className="wechatLibrary__grid">
+                            {list.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className="wechatCardBtn"
+                                onClick={() => handleInsertComponent(c.id)}
+                                title={c.desc ?? c.name}
+                              >
+                                <div className="wechatCardBtn__title">{c.name}</div>
+                                {c.desc && <div className="wechatCardBtn__desc">{c.desc}</div>}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
                 </div>
               )}
 
