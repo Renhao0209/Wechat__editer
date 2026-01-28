@@ -1,13 +1,13 @@
 import type { BuiltInWeChatThemeDef } from '../themeRegistryTypes'
 
 const theme = {
-  id: 'royal-festival',
+  id: 'guofeng',
   label: '中国风·皇家春节',
   vars: {
     // 核心色：朱砂红 (用于强调、链接、重点)
     '--wechat-accent': '#c02c38',
     // 辅助色：流光金 (用于边框、背景底色)
-    '--wechat-gold': '#d4af37', 
+    '--wechat-gold': '#d4af37',
     // 浅色背景：淡淡的红金渐变感
     '--wechat-accent-soft': 'rgba(192, 44, 56, 0.06)',
     '--wechat-accent-softer': 'rgba(212, 175, 55, 0.1)',
