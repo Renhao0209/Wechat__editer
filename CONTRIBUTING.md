@@ -11,7 +11,7 @@
 
 ## 快速开始
 
-- Node.js 18+（推荐 LTS）
+- Node.js 20+（推荐 LTS；仓库 CI 使用 Node 24）
 
 ```bash
 npm install
@@ -54,13 +54,23 @@ npm run build
 
 ## 新增/修改内置主题
 
-文件：`src/wechat/themes/builtInThemes.ts`
+内置主题采用“一主题一文件”的分区，便于 review 与按主题独立提交。
 
-1. 新增一条主题：
+文件：
+
+- 主题文件：`src/wechat/themes/builtins/<themeId>.ts`
+- 注册聚合：`src/wechat/themes/builtins/index.ts`
+- 主题 id 类型：`src/wechat/themes/themeTypes.ts`（`BuiltInWeChatThemeId`）
+
+步骤：
+
+1. 新增主题文件（例如 `ocean.ts`）：
    - `id`：小写英文短 id，保持唯一
    - `label`：UI 下拉展示名
    - `vars`：仅放 `--wechat-*` 变量
    - `extraCss`（可选）：额外规则，建议尽量限制在 `.wechat-article` 范围内
+2. 在 `src/wechat/themes/builtins/index.ts` 里把新主题加入 `BUILT_IN_THEMES_LIST`
+3. 在 `src/wechat/themes/themeTypes.ts` 里把新主题 id 加进 `BuiltInWeChatThemeId`
 2. 约束建议：
    - 不使用外链资源（字体/图片/JS 等）
    - 选择器尽量简单，避免过深嵌套

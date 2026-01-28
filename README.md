@@ -139,7 +139,9 @@ npm run preview
 
 ### 贡献主题（30 秒上手）
 
-1. 在 `src/wechat/themes/builtInThemes.ts` 新增主题（只改这一处最友好）
+1. 在 `src/wechat/themes/builtins/` 新增主题文件（一个主题一个文件）
+2. 在 `src/wechat/themes/builtins/index.ts` 把主题加入 `BUILT_IN_THEMES_LIST`
+3. 在 `src/wechat/themes/themeTypes.ts` 把主题 id 加进 `BuiltInWeChatThemeId`
 2. 本地跑 `npm run build`
 3. 提交 PR
 
