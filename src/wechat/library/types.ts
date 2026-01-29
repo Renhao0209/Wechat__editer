@@ -6,7 +6,7 @@ export type TemplateItem = {
 
 export type ComponentCategory = '标题' | '卡片' | '引用' | '分隔' | '分割线' | '清单' | '图片'
 
-export type ComponentConfigFieldType = 'text' | 'textarea' | 'color' | 'select'
+export type ComponentConfigFieldType = 'text' | 'textarea' | 'color' | 'select' | 'number' | 'range' | 'switch'
 
 export type ComponentConfigField = {
   key: string
@@ -18,6 +18,11 @@ export type ComponentConfigField = {
   default?: string
   placeholder?: string
   options?: Array<{ label: string; value: string }>
+  min?: number
+  max?: number
+  step?: number
+  visibleWhen?: { key: string; equals: string }
+  disabledWhen?: { key: string; equals: string }
 }
 
 export type ComponentConfigSchema = {

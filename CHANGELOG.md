@@ -20,6 +20,25 @@
 
 - 
 
+## [0.2.2] - 2026-01-29
+
+### Added
+
+- 组件 props 迁移框架：支持在 props 内写入 `_v`（版本号），并按组件 `schemaVersion` 自动顺序迁移（见 `COMPONENT_MIGRATIONS` registry）。
+- propSchema 字段类型扩展：新增 `number` / `range` / `switch`，并支持 `min/max/step` 与 `visibleWhen/disabledWhen` 条件元数据。
+- 通用弹窗壳组件：新增可复用的 `Modal`，支持按 `Esc` 关闭、点击遮罩关闭。
+
+### Changed
+
+- 真实迁移示例：`calloutInfo` 组件 schemaVersion 升级到 2，并将字段 `variant` 重命名为 `kind`（旧文档自动迁移）。
+- 组件链路统一走 normalize：插入/选中/应用属性/复制样式等路径统一先做 props normalize（含迁移）再渲染输出。
+- 代码结构瘦身：将 WeChatEditor 中的“属性面板 / 素材库 Dock / 组件选中解析 / Spec 与 props helpers / 多个弹窗”逐步抽离为独立模块与组件。
+
+### Fixed
+
+- 默认参数持久化：保存“用户默认参数”时自动剔除内部字段（如 `_v`），避免污染用户配置。
+
+
 ## [0.2.1] - 2026-01-28
 
 ### Fixed

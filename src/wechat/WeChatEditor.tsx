@@ -20,7 +20,7 @@ import {
 } from './wechatStyles'
 import { BUILT_IN_THEMES } from './themes/builtInThemes'
 import { COMPONENTS } from './library/components'
-import type { ComponentCategory, ComponentConfigSchema, ComponentItem } from './library/types'
+import type { ComponentItem } from './library/types'
 import { LAYOUT_PRESETS } from './library/layoutPresets'
 import { TEMPLATES } from './library/templates'
 import {
@@ -29,6 +29,9 @@ import {
   buildUltraInlinedWeChatArticleHtml,
 } from './inlineWeChat'
 import { decodeComponentProps, encodeComponentProps, escapeHtml, escapeHtmlAttr, toneClass } from './library/componentConfigHelpers'
+import { stripInternalComponentProps } from './library/componentMigrations'
+import { getDefaultComponentValues, getStyleKeys, normalizeComponentValues } from './library/componentProps'
+import { getComponentRenderer, getComponentSchema } from './library/componentSpec'
 import { BlockquoteWithClass } from './extensions/blockquoteWithClass'
 import { ParagraphWithClass } from './extensions/paragraphWithClass'
 import { HeadingWithClass } from './extensions/headingWithClass'
@@ -36,9 +39,19 @@ import { ScrollBox } from './extensions/scrollBox'
 import { BulletListWithClass } from './extensions/bulletListWithClass'
 import { OrderedListWithClass } from './extensions/orderedListWithClass'
 import { HorizontalRuleWithClass } from './extensions/horizontalRuleWithClass'
+import { LibraryDock, type ComponentUiCategory } from './components/LibraryDock'
+import { ComponentInsertDialog } from './components/ComponentInsertDialog'
+import { ImportHtmlDialog } from './components/ImportHtmlDialog'
+import { ThemeJsonImportDialog } from './components/ThemeJsonImportDialog'
+import { ThemeCssImportDialog } from './components/ThemeCssImportDialog'
 import './wechatEditor.css'
 import MarkdownIt from 'markdown-it'
 import TurndownService from 'turndown'
+import {
+  probeMarkdownComponentAtIndex as probeMarkdownComponentAtIndexImpl,
+  probeSelectedComponent as probeSelectedComponentImpl,
+  type SelectedComponentInstance,
+} from './library/componentSelection'
 
 const STORAGE_KEY = 'wechatedit:html'
 const STORAGE_THEME_KEY = 'wechatedit:theme'
@@ -82,17 +95,6 @@ type FsSearchResult = {
   rel: string
   name: string
   kind: 'md' | 'html' | 'txt'
-}
-
-type ComponentUiCategory = Exclude<ComponentCategory, '分隔'>
-
-type SelectedComponentInstance = {
-  componentId: string
-  from?: number
-  to?: number
-  sourceStart?: number
-  sourceEnd?: number
-  values: Record<string, string>
 }
 
 const COMPONENTS_PRESERVE_BODY = new Set<string>(['royalFrameScroll'])
@@ -685,168 +687,28 @@ export default function WeChatEditor() {
   }
 
   const probeSelectedComponent = (next: NonNullable<typeof editor>): SelectedComponentInstance | null => {
-    try {
-      const state = next.state
-      const $from = state.selection.$from
-
-      const inferComponentIdFromNode = (nodeTypeName: string, attrs: Record<string, unknown>): string => {
-        const cls = typeof attrs.class === 'string' ? (attrs.class as string) : ''
-        if (nodeTypeName === 'blockquote') {
-          if (cls.includes('card')) return 'card'
-          if (cls.includes('callout')) return 'calloutInfo'
-        }
-        if (nodeTypeName === 'heading') {
-          const level = typeof attrs.level === 'number' ? (attrs.level as number) : undefined
-          if (level === 2 && cls.includes('titlebar')) return 'titlebarH2'
-        }
-        return ''
-      }
-
-      for (let depth = $from.depth; depth >= 0; depth--) {
-        const node = $from.node(depth)
-        const attrs = (node?.attrs ?? {}) as Record<string, unknown>
-        const nodeTypeName = node?.type?.name ?? ''
-
-        let componentId = typeof attrs.wceComponent === 'string' ? (attrs.wceComponent as string) : ''
-        if (!componentId) componentId = inferComponentIdFromNode(nodeTypeName, attrs)
-        if (!componentId) continue
-
-        const target = COMPONENTS.find((c) => c.id === componentId)
-        if (!target) continue
-        const schema = getComponentSchema(target)
-        const renderer = getComponentRenderer(target)
-        if (!schema || !renderer) continue
-
-        const defaults = getDefaultComponentValues(target, schema)
-        const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
-        const decoded = rawProps ? decodeComponentProps(rawProps) : null
-        const saved = readSavedComponentConfigValues(componentId) ?? {}
-        const values = { ...defaults, ...saved, ...(decoded ?? {}) }
-
-        if (depth <= 0) continue
-        const from = $from.before(depth)
-        const to = from + node.nodeSize
-
-        return { componentId, from, to, values }
-      }
-
-      return null
-    } catch {
-      return null
-    }
+    return probeSelectedComponentImpl(next as any, {
+      components: COMPONENTS,
+      getComponentSchema,
+      getComponentRenderer,
+      getDefaultComponentValues,
+      readSavedComponentConfigValues,
+      decodeComponentProps,
+      normalizeComponentValues,
+    })
   }
 
   const probeMarkdownComponentAtIndex = (text: string, index: number): SelectedComponentInstance | null => {
-    const clampIndex = Math.max(0, Math.min(index, text.length))
-
-    const lastDataAttr = text.lastIndexOf('data-wce-component', clampIndex)
-    const lastFallbackBlockquote = text.lastIndexOf('<blockquote', clampIndex)
-    const lastFallbackH2 = text.lastIndexOf('<h2', clampIndex)
-    const startFromAttr = lastDataAttr >= 0 ? text.lastIndexOf('<', lastDataAttr) : -1
-    const start = Math.max(startFromAttr, lastFallbackBlockquote, lastFallbackH2)
-    if (start < 0) return null
-
-    const tagClose = text.indexOf('>', start)
-    if (tagClose < 0) return null
-    const openTag = text.slice(start, tagClose + 1)
-
-    const tagMatch = /^<\s*([a-z0-9-]+)/i.exec(openTag)
-    const tagName = (tagMatch?.[1] ?? '').toLowerCase()
-    if (!tagName) return null
-
-    const isSelfClosing = /\/\s*>\s*$/.test(openTag) || tagName === 'hr'
-
-    const getAttr = (name: string): string => {
-      const re = new RegExp(`${name}="([^"]*)"`, 'i')
-      const m = re.exec(openTag)
-      return m?.[1] ?? ''
-    }
-
-    let end = tagClose + 1
-    if (!isSelfClosing) {
-      const openNeedle = `<${tagName}`
-      const closeNeedle = `</${tagName}>`
-      let scan = tagClose + 1
-      let depth = 1
-
-      const isNameBoundary = (pos: number): boolean => {
-        const c = text[pos + openNeedle.length]
-        return c == null || /[\s>/]/.test(c)
-      }
-
-      while (scan < text.length) {
-        const nextOpenRaw = text.indexOf(openNeedle, scan)
-        const nextOpen = nextOpenRaw >= 0 && isNameBoundary(nextOpenRaw) ? nextOpenRaw : -1
-        const nextClose = text.indexOf(closeNeedle, scan)
-
-        if (nextClose < 0) return null
-
-        if (nextOpen >= 0 && nextOpen < nextClose) {
-          depth += 1
-          scan = nextOpen + openNeedle.length
-          continue
-        }
-
-        depth -= 1
-        scan = nextClose + closeNeedle.length
-        if (depth <= 0) {
-          end = scan
-          break
-        }
-      }
-    }
-
-    if (clampIndex < start || clampIndex > end) return null
-
-    let componentId = getAttr('data-wce-component')
-    const rawProps = getAttr('data-wce-props')
-    const classAttr = getAttr('class')
-
-    if (!componentId) {
-      const isBlockquote = tagName === 'blockquote'
-      if (isBlockquote) {
-        if (classAttr.includes('card')) componentId = 'card'
-        else if (classAttr.includes('callout')) componentId = 'calloutInfo'
-      } else if (tagName === 'h2') {
-        if (classAttr.includes('titlebar')) componentId = 'titlebarH2'
-      }
-    }
-
-    if (!componentId) return null
-
-    const target = COMPONENTS.find((c) => c.id === componentId)
-    if (!target) return null
-    const schema = getComponentSchema(target)
-    const renderer = getComponentRenderer(target)
-    if (!schema || !renderer) return null
-
-    const defaults = getDefaultComponentValues(target, schema)
-    const decoded = rawProps ? decodeComponentProps(rawProps) : null
-    const saved = readSavedComponentConfigValues(componentId) ?? {}
-    const values = { ...defaults, ...saved, ...(decoded ?? {}) }
-
-    return { componentId, sourceStart: start, sourceEnd: end, values }
+    return probeMarkdownComponentAtIndexImpl(text, index, {
+      components: COMPONENTS,
+      getComponentSchema,
+      getComponentRenderer,
+      getDefaultComponentValues,
+      readSavedComponentConfigValues,
+      decodeComponentProps,
+      normalizeComponentValues,
+    })
   }
-
-  const COMPONENT_CATEGORY_ORDER: ComponentUiCategory[] = useMemo(
-    () => ['标题', '卡片', '引用', '分割线', '清单', '图片'],
-    [],
-  )
-
-  const COMPONENT_CATEGORY_LABEL: Record<ComponentUiCategory, string> = useMemo(
-    () => ({
-      标题: '标题',
-      卡片: '内容框',
-      引用: '引用',
-      分割线: '分割线',
-      清单: '清单',
-      图片: '图片',
-    }),
-    [],
-  )
-
-  const toUiCategory = (cat: ComponentCategory): ComponentUiCategory =>
-    cat === '分隔' ? '分割线' : cat
 
   const [componentCategory, setComponentCategory] = useState<ComponentUiCategory | 'all'>('all')
   const [componentQuery, setComponentQuery] = useState('')
@@ -856,32 +718,6 @@ export default function WeChatEditor() {
     return COMPONENTS.find((x) => x.id === componentConfigTargetId)
   }, [componentConfigTargetId])
 
-  const getComponentSchema = (c: ComponentItem): ComponentConfigSchema | null => {
-    return (c.propSchema ?? c.config ?? null) as ComponentConfigSchema | null
-  }
-
-  const getComponentRenderer = (c: ComponentItem) => {
-    return (c.renderer ?? c.render ?? null) as ComponentItem['render'] | null
-  }
-
-  const getDefaultComponentConfigValues = (schema: ComponentConfigSchema): Record<string, string> => {
-    const out: Record<string, string> = {}
-    for (const f of schema.fields) {
-      out[f.key] = f.default ?? ''
-    }
-    return out
-  }
-
-  const getDefaultComponentValues = (c: ComponentItem, schema: ComponentConfigSchema): Record<string, string> => {
-    return { ...getDefaultComponentConfigValues(schema), ...(c.defaultProps ?? {}) }
-  }
-
-  const getStyleKeys = (schema: ComponentConfigSchema): string[] => {
-    return schema.fields
-      .filter((f) => f.role === 'style' || (f.role == null && (f.type === 'select' || f.type === 'color')))
-      .map((f) => f.key)
-  }
-
   const readSavedComponentConfigValues = (componentId: string): Record<string, string> | null => {
     const map = safeReadJson<Record<string, Record<string, string>>>(STORAGE_COMPONENT_CONFIGS_KEY, {})
     return map[componentId] ?? null
@@ -889,25 +725,9 @@ export default function WeChatEditor() {
 
   const writeSavedComponentConfigValues = (componentId: string, values: Record<string, string>): void => {
     const map = safeReadJson<Record<string, Record<string, string>>>(STORAGE_COMPONENT_CONFIGS_KEY, {})
-    map[componentId] = values
+    map[componentId] = stripInternalComponentProps(values)
     safeWriteJson(STORAGE_COMPONENT_CONFIGS_KEY, map)
   }
-
-  const filteredComponents = useMemo(() => {
-    const q = componentQuery.trim().toLowerCase()
-    return COMPONENTS.filter((c) => {
-      if (componentCategory !== 'all' && toUiCategory(c.category) !== componentCategory) return false
-      if (!q) return true
-      const desc = c.desc ?? c.description ?? ''
-      const tags = (c.tags ?? []).join(' ')
-      return (
-        c.name.toLowerCase().includes(q) ||
-        (desc ? desc.toLowerCase().includes(q) : false) ||
-        (tags ? tags.toLowerCase().includes(q) : false) ||
-        c.id.toLowerCase().includes(q)
-      )
-    })
-  }, [componentCategory, componentQuery])
 
   const editor = useEditor({
     extensions: [
@@ -2131,8 +1951,9 @@ export default function WeChatEditor() {
     const renderer = getComponentRenderer(c)
     if (!schema || !renderer) return
 
-    writeSavedComponentConfigValues(c.id, componentPropsValues)
-    const rendered = renderer(componentPropsValues) as ReturnType<NonNullable<ComponentItem['render']>>
+    const normalized = normalizeComponentValues(c, componentPropsValues)
+    writeSavedComponentConfigValues(c.id, normalized)
+    const rendered = renderer(normalized) as ReturnType<NonNullable<ComponentItem['render']>>
 
     if (editorFormat === 'markdown') {
       const start = selectedComponent.sourceStart
@@ -2144,15 +1965,15 @@ export default function WeChatEditor() {
 
       if (COMPONENTS_PRESERVE_BODY.has(c.id)) {
         if (c.id === 'royalFrameScroll') {
-          const style = componentPropsValues.style || 'royal'
-          const clsTone = toneClass(componentPropsValues)
+          const style = normalized.style || 'royal'
+          const clsTone = toneClass(normalized)
           const blockquoteClass =
             style === 'tone'
               ? ['frame', 'frame--tone', clsTone].filter(Boolean).join(' ')
               : 'frame frame--royal'
-          const propsRaw = escapeHtmlAttr(encodeComponentProps(componentPropsValues))
+          const propsRaw = escapeHtmlAttr(encodeComponentProps(normalized))
 
-          const titleText = (componentPropsValues.title || '活动公告').trim() || '活动公告'
+          const titleText = (normalized.title || '活动公告').trim() || '活动公告'
           const titleEscaped = escapeHtml(titleText)
 
           const block = markdownText.slice(start, end)
@@ -2205,13 +2026,13 @@ export default function WeChatEditor() {
       }
 
       if (c.id === 'royalFrameScroll') {
-        const style = componentPropsValues.style || 'royal'
-        const clsTone = toneClass(componentPropsValues)
+        const style = normalized.style || 'royal'
+        const clsTone = toneClass(normalized)
         const blockquoteClass =
           style === 'tone'
             ? ['frame', 'frame--tone', clsTone].filter(Boolean).join(' ')
             : 'frame frame--royal'
-        const propsRaw = escapeHtmlAttr(encodeComponentProps(componentPropsValues))
+        const propsRaw = escapeHtmlAttr(encodeComponentProps(normalized))
 
         tr.setNodeMarkup(from, undefined, {
           ...node.attrs,
@@ -2220,7 +2041,7 @@ export default function WeChatEditor() {
           wceProps: propsRaw,
         })
 
-        const titleText = (componentPropsValues.title || '活动公告').trim() || '活动公告'
+        const titleText = (normalized.title || '活动公告').trim() || '活动公告'
         const titleNodeText = titleText
         const boldMarkType = state.schema.marks.bold
         const textNode = state.schema.text(titleNodeText, boldMarkType ? [boldMarkType.create()] : [])
@@ -2267,7 +2088,7 @@ export default function WeChatEditor() {
     const schema = getComponentSchema(c)
     if (!schema) return
 
-    setComponentPropsValues(getDefaultComponentValues(c, schema))
+    setComponentPropsValues(normalizeComponentValues(c, getDefaultComponentValues(c, schema)))
     flash('已重置为默认参数（未自动应用）')
   }
 
@@ -2339,7 +2160,7 @@ export default function WeChatEditor() {
         if (inst.start < 0 || inst.end <= inst.start) continue
         if (inst.end > nextText.length) continue
 
-        const nextValues = { ...inst.values, ...stylePatch }
+        const nextValues = normalizeComponentValues(c, { ...inst.values, ...stylePatch })
         const rendered = renderer(nextValues) as any
 
         if (COMPONENTS_PRESERVE_BODY.has(c.id) && c.id === 'royalFrameScroll') {
@@ -2396,8 +2217,8 @@ export default function WeChatEditor() {
       const rawProps = typeof attrs.wceProps === 'string' ? (attrs.wceProps as string) : ''
       if (!rawProps) return
       const decoded = rawProps ? decodeComponentProps(rawProps) : null
-      const base = { ...defaults, ...saved, ...(decoded ?? {}) }
-      const nextValues = { ...base, ...stylePatch }
+      const base = normalizeComponentValues(c, { ...defaults, ...saved, ...(decoded ?? {}) })
+      const nextValues = normalizeComponentValues(c, { ...base, ...stylePatch })
 
       targets.push({ from: pos, to: pos + node.nodeSize, values: nextValues })
     })
@@ -2480,8 +2301,9 @@ export default function WeChatEditor() {
     const renderer = getComponentRenderer(c)
     if (!schema || !renderer) return
 
-    writeSavedComponentConfigValues(c.id, componentConfigValues)
-    const rendered = renderer(componentConfigValues) as ReturnType<NonNullable<ComponentItem['render']>>
+    const normalized = normalizeComponentValues(c, componentConfigValues)
+    writeSavedComponentConfigValues(c.id, normalized)
+    const rendered = renderer(normalized) as ReturnType<NonNullable<ComponentItem['render']>>
     if ('content' in rendered) {
       editor.chain().focus().insertContent(rendered.content).run()
     } else {
@@ -3343,276 +3165,31 @@ export default function WeChatEditor() {
       <main className={`wechatMain wechatMain--${viewMode}`}>
         <aside className="wechatLibraryDock" aria-label="素材库">
           <div className="wechatLibrarySplit" ref={librarySplitRef}>
-            <aside className="wechatLibrary wechatLibrary--top" aria-label="素材库">
-            <div className="wechatLibrary__tabs" role="tablist" aria-label="素材库">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={libraryTab === 'components'}
-                className={`wechatLibrary__tab ${libraryTab === 'components' ? 'is-active' : ''}`}
-                onClick={() => setLibraryTab('components')}
-              >
-                组件
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={libraryTab === 'layouts'}
-                className={`wechatLibrary__tab ${libraryTab === 'layouts' ? 'is-active' : ''}`}
-                onClick={() => setLibraryTab('layouts')}
-              >
-                套版
-              </button>
-
-              <button
-                type="button"
-                role="tab"
-                aria-selected={libraryTab === 'props'}
-                className={`wechatLibrary__tab ${libraryTab === 'props' ? 'is-active' : ''}`}
-                onClick={() => setLibraryTab('props')}
-              >
-                属性
-              </button>
-            </div>
-
-            {libraryTab === 'components' && (
-              <div className="wechatLibrary__panel" role="tabpanel">
-                <div className="wechatLibrary__hint">点击即可插入到光标位置</div>
-                <div className="wechatLibrary__tools" aria-label="组件筛选">
-                  <input
-                    className="wechatLibrary__search"
-                    value={componentQuery}
-                    onChange={(e) => setComponentQuery(e.target.value)}
-                    placeholder="搜索组件（名称/描述/ID）"
-                  />
-
-                  <div className="wechatLibrary__cats" role="group" aria-label="组件分类">
-                    <button
-                      type="button"
-                      className={`wechatPill ${componentCategory === 'all' ? 'is-active' : ''}`}
-                      onClick={() => setComponentCategory('all')}
-                    >
-                      全部
-                    </button>
-                    {COMPONENT_CATEGORY_ORDER.map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        className={`wechatPill ${componentCategory === cat ? 'is-active' : ''}`}
-                        onClick={() => setComponentCategory(cat)}
-                      >
-                        {COMPONENT_CATEGORY_LABEL[cat]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {filteredComponents.length === 0 ? (
-                  <div className="wechatLibrary__empty">没有匹配的组件</div>
-                ) : (
-                  (componentCategory === 'all' ? COMPONENT_CATEGORY_ORDER : [componentCategory]).map((cat) => {
-                    const list = filteredComponents.filter((c) => toUiCategory(c.category) === cat)
-                    if (list.length === 0) return null
-                    return (
-                      <div key={cat} className="wechatLibrary__group">
-                        <div className="wechatLibrary__groupTitle">{COMPONENT_CATEGORY_LABEL[cat]}</div>
-                        <div className="wechatLibrary__grid">
-                          {list.map((c) => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              className="wechatCardBtn"
-                              onClick={() => handleInsertComponent(c.id)}
-                              title={c.desc ?? c.name}
-                            >
-                              {(() => {
-                                const desc = c.desc ?? c.description
-                                const schema = getComponentSchema(c)
-                                const renderer = getComponentRenderer(c)
-                                const isEditable = Boolean(schema && renderer)
-                                const tags = (c.tags ?? []).filter((t) => typeof t === 'string' && t.trim().length > 0)
-                                const catLabel = COMPONENT_CATEGORY_LABEL[toUiCategory(c.category)]
-                                const thumbText = (catLabel || c.name || c.id).slice(0, 2)
-
-                                return (
-                                  <>
-                                    <div className="wechatCardBtn__row">
-                                      <div className="wechatCardBtn__thumb" aria-hidden="true">
-                                        {c.previewThumb ? (
-                                          <img className="wechatCardBtn__thumbImg" src={c.previewThumb} alt="" loading="lazy" />
-                                        ) : (
-                                          <div className="wechatCardBtn__thumbPh">{thumbText}</div>
-                                        )}
-                                      </div>
-
-                                      <div className="wechatCardBtn__main">
-                                        <div className="wechatCardBtn__titleRow">
-                                          <div className="wechatCardBtn__title">{c.name}</div>
-                                          {isEditable && <span className="wechatBadge">可编辑</span>}
-                                        </div>
-                                        <div className="wechatCardBtn__meta">{c.id}</div>
-                                        {desc && <div className="wechatCardBtn__desc">{desc}</div>}
-                                      </div>
-                                    </div>
-
-                                    {tags.length > 0 && (
-                                      <div className="wechatCardBtn__tags" aria-label="标签">
-                                        {tags.slice(0, 4).map((t) => (
-                                          <span key={t} className="wechatTag">
-                                            {t}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </>
-                                )
-                              })()}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            )}
-
-            {libraryTab === 'layouts' && (
-              <div className="wechatLibrary__panel" role="tabpanel">
-                <div className="wechatLibrary__hint">
-                  「整篇套版」会覆盖当前内容；「智能套版」会在保留内容的前提下增强样式。
-                </div>
-
-                <button type="button" className="wechatPrimaryAction" onClick={handleSmartFormat}>
-                  智能套版（不覆盖）
-                </button>
-
-                <div className="wechatLibrary__group">
-                  <div className="wechatLibrary__groupTitle">整篇模板（覆盖）</div>
-                  <div className="wechatLibrary__grid">
-                    {LAYOUT_PRESETS.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="wechatCardBtn"
-                        onClick={() => handleApplyLayoutReplace(p.id)}
-                        title={p.desc}
-                      >
-                        <div className="wechatCardBtn__title">{p.name}</div>
-                        <div className="wechatCardBtn__desc">{p.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {libraryTab === 'props' && (
-              <div className="wechatLibrary__panel" role="tabpanel">
-                <div className="wechatProps__title">组件属性</div>
-                <div className="wechatProps__hint">
-                  先在正文里点选一个组件块（例如提示框/卡片/标题条），这里就能调整参数并应用。
-                </div>
-
-                <button
-                  type="button"
-                  className="wechatPrimaryAction"
-                  onClick={() => {
-                    if (!editor) return
-                    const found = probeSelectedComponent(editor)
-                    setSelectedComponent(found)
-                    if (!found) {
-                      flash('未识别到组件：请把光标放到组件块内部（或点一下组件文字）')
-                    }
-                  }}
-                >
-                  从光标读取（刷新）
-                </button>
-
-                {!selectedComponent ? (
-                  <div className="wechatLibrary__empty">未选中可编辑组件</div>
-                ) : (
-                  (() => {
-                    const c = COMPONENTS.find((x) => x.id === selectedComponent.componentId)
-                    const schema = c ? getComponentSchema(c) : null
-                    if (!c || !schema) return <div className="wechatLibrary__empty">该组件暂不支持属性编辑</div>
-
-                    return (
-                      <>
-                        <div className="wechatProps__meta">
-                          <div className="wechatProps__name">{c.name}</div>
-                          <div className="wechatProps__id">{c.id}</div>
-                        </div>
-
-                        {schema.fields.map((f) => (
-                          <label key={f.key} className="wechatProps__field">
-                            <div className="wechatProps__label">{f.label}</div>
-                            {f.type === 'select' ? (
-                              <select
-                                className="wechatProps__input"
-                                value={componentPropsValues[f.key] ?? ''}
-                                onChange={(e) =>
-                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                                }
-                              >
-                                {(f.options ?? []).map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : f.type === 'color' ? (
-                              <input
-                                className="wechatProps__input"
-                                type="color"
-                                value={componentPropsValues[f.key] ?? f.default ?? '#000000'}
-                                onChange={(e) =>
-                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                                }
-                              />
-                            ) : f.type === 'textarea' ? (
-                              <textarea
-                                className="wechatProps__textarea"
-                                value={componentPropsValues[f.key] ?? ''}
-                                placeholder={f.placeholder}
-                                onChange={(e) =>
-                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                                }
-                              />
-                            ) : (
-                              <input
-                                className="wechatProps__input"
-                                value={componentPropsValues[f.key] ?? ''}
-                                placeholder={f.placeholder}
-                                onChange={(e) =>
-                                  setComponentPropsValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                                }
-                              />
-                            )}
-                          </label>
-                        ))}
-
-                        <div className="wechatProps__actions">
-                          <button type="button" className="wechatPrimaryAction" onClick={handleApplySelectedComponentProps}>
-                            应用到当前组件
-                          </button>
-
-                          <div className="wechatProps__actionsRow">
-                            <button type="button" className="wechatSecondaryAction" onClick={handleResetSelectedComponentDefaults}>
-                              重置默认
-                            </button>
-                            <button type="button" className="wechatSecondaryAction" onClick={handleCopyStyleToSameComponents}>
-                              复制样式到同类
-                            </button>
-                          </div>
-                        </div>
-                      </>
-                    )
-                  })()
-                )}
-              </div>
-            )}
-            </aside>
+            <LibraryDock
+              libraryTab={libraryTab}
+              setLibraryTab={setLibraryTab}
+              componentQuery={componentQuery}
+              setComponentQuery={setComponentQuery}
+              componentCategory={componentCategory}
+              setComponentCategory={setComponentCategory}
+              components={COMPONENTS}
+              getComponentSchema={getComponentSchema}
+              getComponentRenderer={getComponentRenderer}
+              onInsertComponent={handleInsertComponent}
+              layoutPresets={LAYOUT_PRESETS}
+              onSmartFormat={handleSmartFormat}
+              onApplyLayoutReplace={handleApplyLayoutReplace}
+              editor={editor}
+              selectedComponent={selectedComponent}
+              setSelectedComponent={setSelectedComponent}
+              componentPropsValues={componentPropsValues}
+              setComponentPropsValues={setComponentPropsValues}
+              flash={flash}
+              onApplySelectedComponentProps={handleApplySelectedComponentProps}
+              onResetSelectedComponentDefaults={handleResetSelectedComponentDefaults}
+              onCopyStyleToSameComponents={handleCopyStyleToSameComponents}
+              probeSelectedComponent={(next) => probeSelectedComponent(next as any)}
+            />
 
             <div
               className="wechatLibraryResizer"
@@ -4520,160 +4097,46 @@ export default function WeChatEditor() {
         </aside>
       </main>
 
-      {isImportOpen && (
-        <div className="modalOverlay" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div className="modal__title">导入 HTML</div>
-            <div className="modal__desc">
-              粘贴一段 HTML（建议只粘贴正文部分）。导入后会覆盖当前内容。
-            </div>
-            <textarea
-              className="modal__textarea"
-              value={importHtml}
-              onChange={(e) => setImportHtml(e.target.value)}
-              placeholder="<h2>标题</h2><p>正文…</p>"
-            />
-            <div className="modal__actions">
-              <button className="btn btn--ghost" onClick={() => setIsImportOpen(false)}>
-                取消
-              </button>
-              <button className="btn" onClick={handleApplyImport}>
-                覆盖导入
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ImportHtmlDialog
+        open={isImportOpen}
+        html={importHtml}
+        setHtml={setImportHtml}
+        onCancel={() => setIsImportOpen(false)}
+        onConfirmImport={handleApplyImport}
+      />
 
-      {isThemeImportOpen && (
-        <div className="modalOverlay" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div className="modal__title">导入自定义主题（JSON）</div>
-            <div className="modal__desc">
-              支持 vars（CSS 变量）和 extraCss（可选追加 CSS）。导入后会出现在主题下拉框里。
-            </div>
-            <textarea
-              className="modal__textarea"
-              value={themeImportText}
-              onChange={(e) => setThemeImportText(e.target.value)}
-            />
-            <div className="modal__actions">
-              <button className="btn btn--ghost" onClick={() => setIsThemeImportOpen(false)}>
-                取消
-              </button>
-              <button className="btn" onClick={handleApplyThemeImport}>
-                导入主题
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ThemeJsonImportDialog
+        open={isThemeImportOpen}
+        text={themeImportText}
+        setText={setThemeImportText}
+        onCancel={() => setIsThemeImportOpen(false)}
+        onConfirmImport={handleApplyThemeImport}
+      />
 
-      {isThemeCssImportOpen && (
-        <div className="modalOverlay" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div className="modal__title">导入自定义主题（CSS）</div>
-            <div className="modal__desc">
-              自动提取 `--wechat-*` 变量作为主题变量，其余 CSS 会作为额外样式保存。
-            </div>
-            <input
-              className="modal__input"
-              value={themeCssName}
-              onChange={(e) => setThemeCssName(e.target.value)}
-              placeholder="主题名称"
-            />
-            <textarea
-              className="modal__textarea"
-              value={themeCssText}
-              onChange={(e) => setThemeCssText(e.target.value)}
-            />
-            <div className="modal__actions">
-              <button className="btn btn--ghost" onClick={() => setIsThemeCssImportOpen(false)}>
-                取消
-              </button>
-              <button className="btn" onClick={handleApplyThemeCssImport}>
-                导入主题
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ThemeCssImportDialog
+        open={isThemeCssImportOpen}
+        name={themeCssName}
+        setName={setThemeCssName}
+        cssText={themeCssText}
+        setCssText={setThemeCssText}
+        onCancel={() => setIsThemeCssImportOpen(false)}
+        onConfirmImport={handleApplyThemeCssImport}
+      />
 
       {isComponentConfigOpen && componentConfigTarget && getComponentSchema(componentConfigTarget) && (
-        <div className="modalOverlay" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div className="modal__title">
-              {getComponentSchema(componentConfigTarget)!.title ?? `插入组件：${componentConfigTarget.name}`}
-            </div>
-            <div className="modal__desc">
-              {getComponentSchema(componentConfigTarget)!.desc ?? '调整参数后点击“插入”。参数会自动记住下次使用。'}
-            </div>
-
-            {getComponentSchema(componentConfigTarget)!.fields.map((f) => (
-              <label key={f.key} className="modal__field">
-                <div className="modal__label">{f.label}</div>
-                {f.type === 'select' ? (
-                  <select
-                    className="modal__input"
-                    value={componentConfigValues[f.key] ?? ''}
-                    onChange={(e) =>
-                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                    }
-                  >
-                    {(f.options ?? []).map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : f.type === 'color' ? (
-                  <input
-                    className="modal__input"
-                    type="color"
-                    value={componentConfigValues[f.key] ?? f.default ?? '#000000'}
-                    onChange={(e) =>
-                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                    }
-                  />
-                ) : f.type === 'textarea' ? (
-                  <textarea
-                    className="modal__textarea"
-                    value={componentConfigValues[f.key] ?? ''}
-                    placeholder={f.placeholder}
-                    onChange={(e) =>
-                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                    }
-                  />
-                ) : (
-                  <input
-                    className="modal__input"
-                    value={componentConfigValues[f.key] ?? ''}
-                    placeholder={f.placeholder}
-                    onChange={(e) =>
-                      setComponentConfigValues((prev) => ({ ...prev, [f.key]: e.target.value }))
-                    }
-                  />
-                )}
-              </label>
-            ))}
-
-            <div className="modal__actions">
-              <button
-                className="btn btn--ghost"
-                onClick={() => {
-                  setIsComponentConfigOpen(false)
-                  setComponentConfigTargetId(null)
-                  setComponentConfigValues({})
-                }}
-              >
-                取消
-              </button>
-              <button className="btn" onClick={handleConfirmInsertConfiguredComponent}>
-                插入
-              </button>
-            </div>
-          </div>
-        </div>
+        <ComponentInsertDialog
+          open
+          component={componentConfigTarget}
+          schema={getComponentSchema(componentConfigTarget)!}
+          values={componentConfigValues}
+          setValues={setComponentConfigValues}
+          onCancel={() => {
+            setIsComponentConfigOpen(false)
+            setComponentConfigTargetId(null)
+            setComponentConfigValues({})
+          }}
+          onConfirmInsert={handleConfirmInsertConfiguredComponent}
+        />
       )}
     </div>
   )
