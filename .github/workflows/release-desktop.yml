@@ -128,8 +128,11 @@ jobs:
 
           $changelog = Get-Content -Path 'CHANGELOG.md' -Raw
           $escaped = [regex]::Escape($version)
-          $pattern = "(?ms)^## \\[$escaped\\].*?(?=^## \\[|\\z)"
-          $m = [regex]::Match($changelog, $pattern)
+          # NOTE: In PowerShell strings, backslash is not an escape char.
+          # Use single backslashes for regex escaping (e.g. \[ ... \]).
+          $pattern = "^## \[$escaped\].*?(?=^## \[|\z)"
+          $options = [System.Text.RegularExpressions.RegexOptions]::Multiline -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
+          $m = [regex]::Match($changelog, $pattern, $options)
 
           if (-not $m.Success) {
             throw "Changelog section for version '$version' not found (expected heading like: ## [$version] - YYYY-MM-DD)."
