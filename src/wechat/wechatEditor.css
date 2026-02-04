@@ -433,6 +433,7 @@
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
+  color: rgba(0, 0, 0, 0.78);
 }
 
 .tb:hover {
@@ -440,8 +441,15 @@
 }
 
 .tb--active {
-  border-color: rgba(11, 87, 208, 0.35);
-  background: rgba(11, 87, 208, 0.08);
+  border-color: rgba(0, 0, 0, 0.32);
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.96);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.10) inset;
+}
+
+.tb:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .tbColor {
@@ -995,6 +1003,9 @@
 .wechatCtxMenu {
   position: fixed;
   min-width: 180px;
+  max-width: min(260px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
   padding: 6px;
   border-radius: 12px;
   border: 1px solid rgba(0, 0, 0, 0.14);
@@ -1012,6 +1023,17 @@
   font-size: 12px;
   color: rgba(0, 0, 0, 0.82);
   cursor: pointer;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.wechatCtxMenu__item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wechatCtxMenu__item:disabled:hover {
+  background: transparent;
 }
 
 .wechatCtxMenu__item:hover {
@@ -1263,15 +1285,37 @@
 .wechatEditor__prose {
   outline: none;
   color: #111;
-  font-size: 15px;
-  line-height: 1.8;
+  font-size: var(--wechat-font-size, 15px);
+  line-height: var(--wechat-line-height, 1.8);
   --wechat-accent: rgba(11, 87, 208, 0.95);
   --wechat-accent-soft: rgba(11, 87, 208, 0.10);
   --wechat-accent-softer: rgba(11, 87, 208, 0.06);
 }
 
 .wechatEditor__prose p {
-  margin: 12px 0;
+  margin: var(--wechat-p-margin-y, 12px) 0;
+  text-indent: var(--wechat-text-indent, 0em);
+  text-align: var(--wechat-text-align, left);
+}
+
+.wechatEditor__prose p.wce-p--indent2 {
+  text-indent: 2em;
+}
+
+.wechatEditor__prose p.wce-p--align-left {
+  text-align: left;
+}
+
+.wechatEditor__prose p.wce-p--align-justify {
+  text-align: justify;
+}
+
+.wechatEditor__prose p.wce-p--align-center {
+  text-align: center;
+}
+
+.wechatEditor__prose p.wce-p--align-right {
+  text-align: right;
 }
 
 .wechatEditor__prose h1,
@@ -1947,6 +1991,117 @@
   gap: 10px;
   justify-content: flex-end;
   padding-top: 10px;
+}
+
+/* Typography dialog */
+.typoDialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.typoDialog__group {
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.typoDialog__title {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.75);
+  margin-bottom: 8px;
+}
+
+.typoDialog__hint {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.58);
+  margin-top: 6px;
+}
+
+.typoDialog__presetRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.typoDialog__preset {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 12px;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.typoDialog__preset:hover {
+  border-color: rgba(11, 87, 208, 0.35);
+  box-shadow: 0 0 0 3px rgba(11, 87, 208, 0.10);
+}
+
+.typoDialog__preset.is-active {
+  border-color: rgba(11, 87, 208, 0.45);
+  background: rgba(11, 87, 208, 0.06);
+}
+
+.typoDialog__presetLabel {
+  font-weight: 800;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.80);
+}
+
+.typoDialog__presetDesc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.typoDialog__row {
+  display: grid;
+  grid-template-columns: 80px 1fr 90px 26px;
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.typoDialog__rowLabel {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.70);
+  font-weight: 650;
+}
+
+.typoDialog__range {
+  width: 100%;
+}
+
+.typoDialog__num {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.typoDialog__unit {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.typoDialog__preview {
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  padding: 12px;
+}
+
+@media (max-width: 980px) {
+  .typoDialog__presetRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .typoDialog__row {
+    grid-template-columns: 72px 1fr 80px 26px;
+  }
 }
 
 @media (max-width: 980px) {

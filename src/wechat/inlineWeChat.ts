@@ -6,10 +6,41 @@ type InlineParams = {
   bodyHtml: string
   theme: WeChatThemeId
   customTheme?: WeChatCustomTheme
+  typography?: WeChatTypography
 }
 
 type ComputedInlineParams = InlineParams & {
   cssText: string
+}
+
+export type WeChatTypography = {
+  fontSizePx?: number
+  lineHeight?: number
+  paragraphSpacingPx?: number
+  firstLineIndentEm?: number
+  paragraphAlign?: 'left' | 'justify' | 'center' | 'right'
+  paragraphSpacingMode?: 'wechat' | 'fixed'
+}
+
+function hasInlineStyleProp(el: HTMLElement, prop: string): boolean {
+  const s = (el.getAttribute('style') || '').trim()
+  if (!s) return false
+  // Simple existence check; avoids overriding user-set inline styles.
+  const re = new RegExp(`(^|;)\\s*${prop.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*:`, 'i')
+  return re.test(s)
+}
+
+function normalizeTypography(input?: WeChatTypography) {
+  const t = input ?? {}
+  const fontSizePx = Number.isFinite(t.fontSizePx) && (t.fontSizePx as number) > 0 ? (t.fontSizePx as number) : 15
+  const lineHeight = Number.isFinite(t.lineHeight) && (t.lineHeight as number) > 0 ? (t.lineHeight as number) : 1.8
+  const paragraphSpacingPx =
+    Number.isFinite(t.paragraphSpacingPx) && (t.paragraphSpacingPx as number) >= 0 ? (t.paragraphSpacingPx as number) : 12
+  const firstLineIndentEm =
+    Number.isFinite(t.firstLineIndentEm) && (t.firstLineIndentEm as number) >= 0 ? (t.firstLineIndentEm as number) : 0
+  const paragraphAlign = t.paragraphAlign ?? 'left'
+  const paragraphSpacingMode = t.paragraphSpacingMode ?? 'wechat'
+  return { fontSizePx, lineHeight, paragraphSpacingPx, firstLineIndentEm, paragraphAlign, paragraphSpacingMode }
 }
 
 function styleToString(style: Record<string, string | undefined>): string {
@@ -82,6 +113,7 @@ function themeVars(theme: WeChatThemeId, customTheme?: WeChatCustomTheme) {
 
 export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
   const vars = themeVars(params.theme, params.customTheme)
+  const typo = normalizeTypography(params.typography)
   const doc = new DOMParser().parseFromString(
     `<section data-theme="${params.theme}">${params.bodyHtml}</section>`,
     'text/html',
@@ -93,8 +125,8 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
   setStyle(article, {
     color: '#111',
     'background-color': '#fff',
-    'font-size': '15px',
-    'line-height': '1.8',
+    'font-size': `${typo.fontSizePx}px`,
+    'line-height': String(typo.lineHeight),
     'word-break': 'break-word',
   })
 
@@ -123,7 +155,28 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
     }
 
     if (tag === 'p') {
-      setStyle(el, { margin: '12px 0' })
+      const margin = typo.paragraphSpacingMode === 'wechat' ? '0' : `${typo.paragraphSpacingPx}px 0`
+      const style: Record<string, string | undefined> = { margin }
+
+      if (!hasInlineStyleProp(el, 'text-indent')) {
+        if (el.classList.contains('wce-p--indent2')) style['text-indent'] = '2em'
+        else style['text-indent'] = `${typo.firstLineIndentEm}em`
+      }
+      if (!hasInlineStyleProp(el, 'text-align')) {
+        const align =
+          el.classList.contains('wce-p--align-left')
+            ? 'left'
+            : el.classList.contains('wce-p--align-center')
+              ? 'center'
+              : el.classList.contains('wce-p--align-right')
+                ? 'right'
+                : el.classList.contains('wce-p--align-justify')
+                  ? 'justify'
+                  : null
+        style['text-align'] = align ?? typo.paragraphAlign
+      }
+
+      setStyle(el, style)
 
       if (el.classList.contains('lead')) {
         setStyle(el, { 'font-size': '16px', color: 'rgba(0,0,0,0.62)', margin: '10px 0 14px' })
@@ -304,6 +357,7 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
         'max-width': '100%',
         height: 'auto',
         display: 'block',
+        clear: 'both',
         margin: '10px auto',
         'border-radius': '8px',
       })
@@ -499,6 +553,30 @@ const COMPUTED_STYLE_PROPS = [
   'overflow-y',
 ] as const
 
+function parsePx(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed.endsWith('px')) return null
+  const n = Number.parseFloat(trimmed.slice(0, -2))
+  return Number.isFinite(n) ? n : null
+}
+
+function toUnitlessLineHeight(cs: CSSStyleDeclaration): string | null {
+  const lhRaw = (cs.getPropertyValue('line-height') || '').trim()
+  if (!lhRaw || lhRaw === 'normal') return null
+
+  // If already unitless (rare in computed styles), keep it.
+  if (/^[0-9]+(\.[0-9]+)?$/.test(lhRaw)) return lhRaw
+
+  const lhPx = parsePx(lhRaw)
+  const fsPx = parsePx((cs.getPropertyValue('font-size') || '').trim())
+  if (!lhPx || !fsPx || fsPx <= 0) return null
+
+  const ratio = lhPx / fsPx
+  if (!Number.isFinite(ratio) || ratio <= 0) return null
+  // Keep a short stable representation like 1.8 / 1.35
+  return String(Number(ratio.toFixed(3))).replace(/\.0+$/, '')
+}
+
 function inlineComputedStyles(root: HTMLElement) {
   const all = [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))]
   for (const el of all) {
@@ -511,6 +589,14 @@ function inlineComputedStyles(root: HTMLElement) {
       if (!trimmed) continue
       // Avoid bloating with fully-transparent defaults.
       if ((prop === 'background-color' || prop === 'box-shadow') && trimmed === 'rgba(0, 0, 0, 0)') continue
+
+      if (prop === 'line-height') {
+        // WeChat may re-scale font-size; px line-height can cause glyph overlap.
+        const unitless = toUnitlessLineHeight(cs)
+        if (unitless) style[prop] = unitless
+        continue
+      }
+
       style[prop] = trimmed
     }
 
@@ -525,6 +611,7 @@ function inlineComputedStyles(root: HTMLElement) {
  * This usually matches the preview more closely than hand-written inlining.
  */
 export function buildComputedInlinedWeChatArticleHtml(params: ComputedInlineParams): string {
+  const typo = normalizeTypography(params.typography)
   // Hidden host to compute styles.
   const host = document.createElement('div')
   host.style.position = 'fixed'
@@ -550,6 +637,34 @@ export function buildComputedInlinedWeChatArticleHtml(params: ComputedInlinePara
 
   try {
     inlineComputedStyles(root)
+
+    // Paragraph spacing: either leave to WeChat editor (margin:0) or lock it.
+    const pMargin = typo.paragraphSpacingMode === 'wechat' ? '0' : `${typo.paragraphSpacingPx}px 0`
+    for (const p of Array.from(root.querySelectorAll<HTMLElement>('p'))) {
+      setStyle(p, { margin: pMargin })
+
+      if (!hasInlineStyleProp(p, 'text-indent')) {
+        setStyle(p, { 'text-indent': p.classList.contains('wce-p--indent2') ? '2em' : `${typo.firstLineIndentEm}em` })
+      }
+      if (!hasInlineStyleProp(p, 'text-align')) {
+        const align =
+          p.classList.contains('wce-p--align-left')
+            ? 'left'
+            : p.classList.contains('wce-p--align-center')
+              ? 'center'
+              : p.classList.contains('wce-p--align-right')
+                ? 'right'
+                : p.classList.contains('wce-p--align-justify')
+                  ? 'justify'
+                  : null
+        setStyle(p, { 'text-align': align ?? typo.paragraphAlign })
+      }
+    }
+
+    // Defensive: prevent images from overlapping text in float-ish contexts.
+    for (const img of Array.from(root.querySelectorAll<HTMLElement>('img'))) {
+      setStyle(img, { clear: 'both', display: 'block' })
+    }
 
     // Avoid top clipping in containers that crop the first element.
     // A tiny non-empty spacer is more reliable than tweaking margins.

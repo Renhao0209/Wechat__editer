@@ -1,5 +1,9 @@
 $ErrorActionPreference = 'Stop'
 
+# NOTE: Keep this script ASCII-only for maximum compatibility with Windows PowerShell 5.1.
+# The strict "release rule" (clean artifacts + bump version + write changelog/release-notes)
+# is implemented in Node: scripts/strict-release.mjs
+
 function Get-WindowsProxySettings {
   $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
   $settings = Get-ItemProperty -Path $key -Name ProxyEnable, ProxyServer, ProxyOverride -ErrorAction SilentlyContinue
@@ -77,4 +81,29 @@ if ($proxySettings) {
   Write-Host "[dist-win] No Windows proxy detected (ProxyEnable=0)." -ForegroundColor Yellow
 }
 
-npm run build:desktop
+Write-Host "[dist-win] Strict rule preflight (clean + bump + changelog)..." -ForegroundColor Cyan
+$strictArgs = @()
+if ($env:WCE_RELEASE_VERSION -and -not [string]::IsNullOrWhiteSpace($env:WCE_RELEASE_VERSION)) {
+  $strictArgs += '--set-version'
+  $strictArgs += $env:WCE_RELEASE_VERSION
+}
+
+node scripts/strict-release.mjs @strictArgs
+if ($LASTEXITCODE -ne 0) {
+  throw "[dist-win] strict-release preflight failed with exit code $LASTEXITCODE"
+}
+
+$shouldPublish = $false
+if ($env:WCE_PUBLISH) {
+  $v = [string]$env:WCE_PUBLISH
+  if ($v -eq '1' -or $v -ieq 'true' -or $v -ieq 'yes') { $shouldPublish = $true }
+}
+
+$buildScript = if ($shouldPublish) { 'build:desktop:publish' } else { 'build:desktop' }
+
+if ($args -and $args.Count -gt 0) {
+  npm run $buildScript -- $args
+} else {
+  npm run $buildScript
+}
+

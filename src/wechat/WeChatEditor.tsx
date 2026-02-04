@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { NodeSelection } from '@tiptap/pm/state'
 import type { Node as PMNode } from '@tiptap/pm/model'
@@ -44,6 +44,7 @@ import { ComponentInsertDialog } from './components/ComponentInsertDialog'
 import { ImportHtmlDialog } from './components/ImportHtmlDialog'
 import { ThemeJsonImportDialog } from './components/ThemeJsonImportDialog'
 import { ThemeCssImportDialog } from './components/ThemeCssImportDialog'
+import { TypographyDialog, type TypographySettings } from './components/TypographyDialog'
 import './wechatEditor.css'
 import MarkdownIt from 'markdown-it'
 import TurndownService from 'turndown'
@@ -60,6 +61,7 @@ const STORAGE_VIEW_KEY = 'wechatedit:view'
 const STORAGE_COMPONENT_CONFIGS_KEY = 'wechatedit:componentConfigs'
 const STORAGE_EDITOR_FORMAT_KEY = 'wechatedit:editorFormat'
 const STORAGE_RECENT_COLORS_KEY = 'wechatedit:recentTextColors'
+const STORAGE_TYPOGRAPHY_KEY = 'wechatedit:typography'
 const STORAGE_DRAFTS_KEY = 'wechatedit:drafts'
 const STORAGE_ACTIVE_DRAFT_KEY = 'wechatedit:activeDraftId'
 const STORAGE_FILES_PANEL_HEIGHT_KEY = 'wechatedit:filesPanelHeight'
@@ -69,6 +71,15 @@ const STORAGE_ACTIVE_FILE_KEY = 'wechatedit:activeFile'
 type ViewMode = 'split' | 'edit' | 'preview'
 
 type EditorFormat = 'rich' | 'markdown'
+
+const DEFAULT_TYPOGRAPHY: TypographySettings = {
+  fontSizePx: 15,
+  lineHeight: 1.8,
+  paragraphSpacingPx: 12,
+  firstLineIndentEm: 0,
+  paragraphAlign: 'left',
+  copyParagraphSpacing: 'wechat',
+}
 
 type DraftItem = {
   id: string
@@ -278,6 +289,10 @@ function downloadTextFile(filename: string, content: string, mime = 'text/plain;
 }
 
 export default function WeChatEditor() {
+  const PARAGRAPH_INDENT_2_CLASS = 'wce-p--indent2'
+  const PARAGRAPH_ALIGN_PREFIX = 'wce-p--align-'
+  const PARAGRAPH_ALIGN_VALUES = ['left', 'justify', 'center', 'right'] as const
+  type ParagraphAlign = (typeof PARAGRAPH_ALIGN_VALUES)[number]
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const saved = safeReadLocalStorage(STORAGE_VIEW_KEY)
     if (saved === 'split' || saved === 'edit' || saved === 'preview') return saved
@@ -365,6 +380,11 @@ export default function WeChatEditor() {
   const [isThemeCssImportOpen, setIsThemeCssImportOpen] = useState(false)
   const [themeCssName, setThemeCssName] = useState('')
   const [themeCssText, setThemeCssText] = useState('')
+
+  const [isTypographyOpen, setIsTypographyOpen] = useState(false)
+  const [typography, setTypography] = useState<TypographySettings>(() => {
+    return safeReadJson<TypographySettings>(STORAGE_TYPOGRAPHY_KEY, DEFAULT_TYPOGRAPHY)
+  })
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const moreMenuRef = useRef<HTMLDetailsElement | null>(null)
@@ -467,6 +487,17 @@ export default function WeChatEditor() {
       }
   >(null)
 
+  const [editorContextMenu, setEditorContextMenu] = useState<
+    | null
+    | {
+        x: number
+        y: number
+        kind: 'rich' | 'markdown'
+      }
+  >(null)
+
+  const editorCtxMenuRef = useRef<HTMLDivElement | null>(null)
+
   const [fsInlineAction, setFsInlineAction] = useState<
     | null
     | {
@@ -511,6 +542,61 @@ export default function WeChatEditor() {
   const DEFAULT_TEXT_COLOR = '#111111'
   const [textColorHex, setTextColorHex] = useState<string>(DEFAULT_TEXT_COLOR)
   const [textColorInput, setTextColorInput] = useState<string>(DEFAULT_TEXT_COLOR)
+
+  type FormatPainterPayload = {
+    marks: {
+      bold: boolean
+      italic: boolean
+      underline: boolean
+      strike: boolean
+      color: string | null
+    }
+    paragraph: {
+      indent2: boolean
+      align: ParagraphAlign
+    }
+  }
+
+  // Force toolbar to refresh on selection changes.
+  const [editorUiTick, setEditorUiTick] = useState(0)
+
+  type ToolbarState = {
+    bold: boolean
+    italic: boolean
+    underline: boolean
+    strike: boolean
+    link: boolean
+    headingLevel: 0 | 1 | 2 | 3
+    bulletList: boolean
+    orderedList: boolean
+    blockquote: boolean
+    inParagraph: boolean
+    paragraphIndent2: boolean
+    paragraphAlign: ParagraphAlign
+  }
+
+  const [toolbarState, setToolbarState] = useState<ToolbarState>(() => ({
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    link: false,
+    headingLevel: 0,
+    bulletList: false,
+    orderedList: false,
+    blockquote: false,
+    inParagraph: false,
+    paragraphIndent2: false,
+    paragraphAlign: 'left',
+  }))
+
+  const [isFormatPainterOn, setIsFormatPainterOn] = useState(false)
+  const [isFormatPainterLocked, setIsFormatPainterLocked] = useState(false)
+  const formatPainterActiveRef = useRef(false)
+  const formatPainterLockedRef = useRef(false)
+  const formatPainterPayloadRef = useRef<FormatPainterPayload | null>(null)
+  const formatPainterArmedSelectionRef = useRef<string>('')
+  const isApplyingFormatPainterRef = useRef(false)
 
   type ImageStyleId = '' | 'wce-img--rounded' | 'wce-img--shadow' | 'wce-img--border' | 'wce-img--circle'
   const IMAGE_STYLE_OPTIONS: Array<{ id: ImageStyleId; label: string }> = [
@@ -815,7 +901,16 @@ export default function WeChatEditor() {
       safeWriteLocalStorage(STORAGE_KEY, html)
       setCurrentHtml(html)
     },
+    onTransaction: ({ editor: next }) => {
+      // Keep toolbar highlight in sync even when selection doesn't move.
+      setEditorUiTick((x) => x + 1)
+      setToolbarState(deriveToolbarState(next))
+    },
     onSelectionUpdate: ({ editor: next }) => {
+      // Trigger rerender so toolbar active states stay in sync.
+      setEditorUiTick((x) => x + 1)
+      setToolbarState(deriveToolbarState(next))
+
       const found = probeSelectedComponent(next)
       setSelectedComponent(found)
 
@@ -832,8 +927,98 @@ export default function WeChatEditor() {
       const normalized = imgCls.trim()
       const allowed = new Set(IMAGE_STYLE_OPTIONS.map((x) => x.id))
       setImageStyle((allowed.has(normalized as ImageStyleId) ? (normalized as ImageStyleId) : '') as ImageStyleId)
+
+      // Format painter: apply once to the next selection/caret change.
+      if (formatPainterActiveRef.current) {
+        const payload = formatPainterPayloadRef.current
+        if (!payload) return
+        if (isApplyingFormatPainterRef.current) return
+
+        const selKey = `${next.state.selection.from}-${next.state.selection.to}`
+        if (!selKey || selKey === formatPainterArmedSelectionRef.current) return
+
+        isApplyingFormatPainterRef.current = true
+        try {
+          const chain = next.chain().focus()
+
+          if (payload.marks.bold) chain.setMark('bold')
+          else chain.unsetMark('bold')
+          if (payload.marks.italic) chain.setMark('italic')
+          else chain.unsetMark('italic')
+          if (payload.marks.underline) chain.setMark('underline')
+          else chain.unsetMark('underline')
+          if (payload.marks.strike) chain.setMark('strike')
+          else chain.unsetMark('strike')
+
+          if (payload.marks.color) chain.setColor(payload.marks.color)
+          else chain.unsetColor()
+
+          // Paragraph-level block formatting (best-effort).
+          if (next.isActive('paragraph')) {
+            const attrs = next.getAttributes('paragraph') as Record<string, unknown>
+            const raw = typeof attrs.class === 'string' ? (attrs.class as string) : ''
+            const tokens = raw
+              .split(/\s+/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+
+            const nextSet = new Set(tokens)
+            // Reset our managed classes.
+            nextSet.delete(PARAGRAPH_INDENT_2_CLASS)
+            for (const t of Array.from(nextSet)) {
+              if (t.startsWith(PARAGRAPH_ALIGN_PREFIX)) nextSet.delete(t)
+            }
+
+            if (payload.paragraph.indent2) nextSet.add(PARAGRAPH_INDENT_2_CLASS)
+            nextSet.add(`${PARAGRAPH_ALIGN_PREFIX}${payload.paragraph.align}`)
+
+            chain.updateAttributes('paragraph', {
+              class: Array.from(nextSet).join(' ') || null,
+              textAlign: null,
+            })
+          }
+
+          chain.run()
+          formatPainterArmedSelectionRef.current = selKey
+          flash('格式刷已应用')
+        } catch {
+          flash('格式刷应用失败')
+        } finally {
+          isApplyingFormatPainterRef.current = false
+          if (!formatPainterLockedRef.current) {
+            formatPainterActiveRef.current = false
+            formatPainterPayloadRef.current = null
+            formatPainterArmedSelectionRef.current = ''
+            formatPainterLockedRef.current = false
+            setIsFormatPainterLocked(false)
+            setIsFormatPainterOn(false)
+          }
+        }
+      }
     },
   })
+
+  useEffect(() => {
+    if (!editor) return
+    setToolbarState(deriveToolbarState(editor))
+  }, [editor, typography])
+
+  useEffect(() => {
+    if (!isFormatPainterOn) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      formatPainterActiveRef.current = false
+      formatPainterPayloadRef.current = null
+      formatPainterArmedSelectionRef.current = ''
+      formatPainterLockedRef.current = false
+      setIsFormatPainterLocked(false)
+      setIsFormatPainterOn(false)
+      flash('已关闭格式刷')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isFormatPainterOn])
 
   useEffect(() => {
     if (libraryTab !== 'props') return
@@ -859,6 +1044,10 @@ export default function WeChatEditor() {
   useEffect(() => {
     safeWriteLocalStorage(STORAGE_CUSTOM_THEMES_KEY, JSON.stringify(customThemes))
   }, [customThemes])
+
+  useEffect(() => {
+    safeWriteLocalStorage(STORAGE_TYPOGRAPHY_KEY, JSON.stringify(typography))
+  }, [typography])
 
   useEffect(() => {
     const editorEl = editorFormat === 'markdown' ? markdownScrollRef.current : editorScrollRef.current
@@ -967,23 +1156,79 @@ export default function WeChatEditor() {
     setMarkdownText(htmlToMarkdown(currentHtml))
   }, [currentHtml, editorFormat])
 
+  const exportCss = useMemo(() => {
+    const base = getWeChatBaseCss()
+    const themed = getWeChatThemeCss(theme, selectedCustomTheme)
+
+    const fontSizePx = Number.isFinite(typography.fontSizePx) ? typography.fontSizePx : DEFAULT_TYPOGRAPHY.fontSizePx
+    const lineHeight = Number.isFinite(typography.lineHeight) ? typography.lineHeight : DEFAULT_TYPOGRAPHY.lineHeight
+    const paragraphSpacingPx = Number.isFinite(typography.paragraphSpacingPx)
+      ? typography.paragraphSpacingPx
+      : DEFAULT_TYPOGRAPHY.paragraphSpacingPx
+    const firstLineIndentEm = Number.isFinite(typography.firstLineIndentEm)
+      ? typography.firstLineIndentEm
+      : DEFAULT_TYPOGRAPHY.firstLineIndentEm
+    const paragraphAlign = typography.paragraphAlign || DEFAULT_TYPOGRAPHY.paragraphAlign
+
+    const typographyCss = `
+.wechat-article {
+  --wechat-font-size: ${fontSizePx}px;
+  --wechat-line-height: ${lineHeight};
+  --wechat-p-margin-y: ${paragraphSpacingPx}px;
+  --wechat-text-indent: ${firstLineIndentEm}em;
+  --wechat-text-align: ${paragraphAlign};
+}
+`.trim()
+
+    return [base, themed, typographyCss].filter((s) => s.trim().length > 0).join('\n\n')
+  }, [selectedCustomTheme, theme, typography])
+
+  const editorTypographyVars = useMemo(() => {
+    const fontSizePx = Number.isFinite(typography.fontSizePx) ? typography.fontSizePx : DEFAULT_TYPOGRAPHY.fontSizePx
+    const lineHeight = Number.isFinite(typography.lineHeight) ? typography.lineHeight : DEFAULT_TYPOGRAPHY.lineHeight
+    const paragraphSpacingPx = Number.isFinite(typography.paragraphSpacingPx)
+      ? typography.paragraphSpacingPx
+      : DEFAULT_TYPOGRAPHY.paragraphSpacingPx
+    const firstLineIndentEm = Number.isFinite(typography.firstLineIndentEm)
+      ? typography.firstLineIndentEm
+      : DEFAULT_TYPOGRAPHY.firstLineIndentEm
+    const paragraphAlign = typography.paragraphAlign || DEFAULT_TYPOGRAPHY.paragraphAlign
+
+    return {
+      // Keep same variable names as export CSS so style stays consistent.
+      ['--wechat-font-size' as any]: `${fontSizePx}px`,
+      ['--wechat-line-height' as any]: String(lineHeight),
+      ['--wechat-p-margin-y' as any]: `${paragraphSpacingPx}px`,
+      ['--wechat-text-indent' as any]: `${firstLineIndentEm}em`,
+      ['--wechat-text-align' as any]: paragraphAlign,
+    } as React.CSSProperties
+  }, [typography])
+
   const exportFullHtml = useMemo(() => {
     return buildWeChatHtmlDocument({
       bodyHtml: previewHtml,
       theme,
       customTheme: selectedCustomTheme,
+      cssText: exportCss,
       title: '公众号文章',
     })
-  }, [previewHtml, selectedCustomTheme, theme])
+  }, [exportCss, previewHtml, selectedCustomTheme, theme])
 
   const exportBodyHtml = useMemo(() => {
     // For convenience: copy body only (no <style> / <html>)
     return `<article class="wechat-article" data-theme="${theme}">${previewHtml}</article>`
   }, [previewHtml, theme])
 
-  const exportCss = useMemo(() => {
-    return [getWeChatBaseCss(), getWeChatThemeCss(theme, selectedCustomTheme)].join('\n\n')
-  }, [selectedCustomTheme, theme])
+  const inlineTypography = useMemo(() => {
+    return {
+      fontSizePx: typography.fontSizePx,
+      lineHeight: typography.lineHeight,
+      paragraphSpacingPx: typography.paragraphSpacingPx,
+      firstLineIndentEm: typography.firstLineIndentEm,
+      paragraphAlign: typography.paragraphAlign,
+      paragraphSpacingMode: typography.copyParagraphSpacing,
+    } as const
+  }, [typography])
 
   const exportClipboardHtml = useMemo(() => {
     // Clipboard HTML fragment: include <style> so pasted rich text keeps theme when possible.
@@ -991,17 +1236,100 @@ export default function WeChatEditor() {
   }, [exportBodyHtml, exportCss])
 
   const exportInlinedArticleHtml = useMemo(() => {
-    return buildInlinedWeChatArticleHtml({ bodyHtml: previewHtml, theme, customTheme: selectedCustomTheme })
-  }, [previewHtml, selectedCustomTheme, theme])
+    return buildInlinedWeChatArticleHtml({
+      bodyHtml: previewHtml,
+      theme,
+      customTheme: selectedCustomTheme,
+      typography: inlineTypography,
+    })
+  }, [inlineTypography, previewHtml, selectedCustomTheme, theme])
 
   const exportUltraInlinedArticleHtml = useMemo(() => {
-    return buildUltraInlinedWeChatArticleHtml({ bodyHtml: previewHtml, theme, customTheme: selectedCustomTheme })
-  }, [previewHtml, selectedCustomTheme, theme])
+    return buildUltraInlinedWeChatArticleHtml({
+      bodyHtml: previewHtml,
+      theme,
+      customTheme: selectedCustomTheme,
+      typography: inlineTypography,
+    })
+  }, [inlineTypography, previewHtml, selectedCustomTheme, theme])
 
   const previewScopedCss = useMemo(() => {
     const scopedRoot = exportCss.replaceAll(':root', '.wechatPreviewScope')
     return scopedRoot.replaceAll('.wechat-article', '.wechatPreviewScope .wechat-article')
   }, [exportCss])
+
+  void editorUiTick
+
+  function deriveToolbarState(next: NonNullable<typeof editor>): ToolbarState {
+    const inParagraph = next.isActive('paragraph')
+    const bold = next.isActive('bold')
+    const italic = next.isActive('italic')
+    const underline = next.isActive('underline')
+    const strike = next.isActive('strike')
+    const link = next.isActive('link')
+    const bulletList = next.isActive('bulletList')
+    const orderedList = next.isActive('orderedList')
+    const blockquote = next.isActive('blockquote')
+
+    // Heading level: don't rely solely on isActive; inspect ancestors for robustness.
+    let headingLevel: 0 | 1 | 2 | 3 = 0
+    try {
+      const $from = next.state.selection.$from
+      for (let d = $from.depth; d >= 0; d--) {
+        const n = $from.node(d)
+        if (n.type.name === 'heading') {
+          const lv = typeof n.attrs.level === 'number' ? (n.attrs.level as number) : 0
+          headingLevel = lv === 1 || lv === 2 || lv === 3 ? (lv as 1 | 2 | 3) : 0
+          break
+        }
+      }
+    } catch {
+      headingLevel = (next.isActive('heading', { level: 1 }) ? 1 : next.isActive('heading', { level: 2 }) ? 2 : next.isActive('heading', { level: 3 }) ? 3 : 0) as
+        | 0
+        | 1
+        | 2
+        | 3
+    }
+
+    let paragraphIndent2 = false
+    let paragraphAlign: ParagraphAlign = (typography.paragraphAlign || DEFAULT_TYPOGRAPHY.paragraphAlign) as ParagraphAlign
+    if (!(PARAGRAPH_ALIGN_VALUES as readonly string[]).includes(paragraphAlign)) paragraphAlign = 'left'
+
+    if (inParagraph) {
+      const attrs = next.getAttributes('paragraph') as Record<string, unknown>
+      const raw = typeof attrs.class === 'string' ? (attrs.class as string) : ''
+      const tokens = raw
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+
+      paragraphIndent2 = tokens.includes(PARAGRAPH_INDENT_2_CLASS)
+
+      const ta = typeof attrs.textAlign === 'string' ? (attrs.textAlign as string) : ''
+      if ((PARAGRAPH_ALIGN_VALUES as readonly string[]).includes(ta)) paragraphAlign = ta as ParagraphAlign
+
+      const found = tokens.find((t) => t.startsWith(PARAGRAPH_ALIGN_PREFIX))
+      if (found) {
+        const v = found.slice(PARAGRAPH_ALIGN_PREFIX.length)
+        if ((PARAGRAPH_ALIGN_VALUES as readonly string[]).includes(v)) paragraphAlign = v as ParagraphAlign
+      }
+    }
+
+    return {
+      bold,
+      italic,
+      underline,
+      strike,
+      link,
+      headingLevel,
+      bulletList,
+      orderedList,
+      blockquote,
+      inParagraph,
+      paragraphIndent2,
+      paragraphAlign,
+    }
+  }
 
   const charCount = editor?.storage.characterCount.characters() ?? 0
 
@@ -1016,6 +1344,210 @@ export default function WeChatEditor() {
       return false
     }
     return true
+  }
+
+  const getCurrentParagraphClassTokens = (): string[] => {
+    const raw = ((editor?.getAttributes('paragraph')?.class as string | undefined) ?? '').trim()
+    return raw
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+
+  const getCurrentParagraphExplicitAlign = (): ParagraphAlign | null => {
+    if (!editor?.isActive('paragraph')) return null
+    const attrs = editor.getAttributes('paragraph') as Record<string, unknown>
+    const ta = typeof attrs.textAlign === 'string' ? (attrs.textAlign as string) : ''
+    if ((PARAGRAPH_ALIGN_VALUES as readonly string[]).includes(ta)) return ta as ParagraphAlign
+
+    const tokens = getCurrentParagraphClassTokens()
+    const found = tokens.find((t) => t.startsWith(PARAGRAPH_ALIGN_PREFIX))
+    if (!found) return null
+    const raw = found.slice(PARAGRAPH_ALIGN_PREFIX.length)
+    return (PARAGRAPH_ALIGN_VALUES as readonly string[]).includes(raw) ? (raw as ParagraphAlign) : null
+  }
+
+  const getCurrentParagraphEffectiveAlign = (): ParagraphAlign => {
+    const explicit = getCurrentParagraphExplicitAlign()
+    if (explicit) return explicit
+    const global = (typography.paragraphAlign || DEFAULT_TYPOGRAPHY.paragraphAlign) as ParagraphAlign
+    return (PARAGRAPH_ALIGN_VALUES as readonly string[]).includes(global) ? global : 'left'
+  }
+
+  const setCurrentParagraphAlign = (align: ParagraphAlign | null) => {
+    if (!ensureEditor()) return
+    if (!editor.isActive('paragraph')) {
+      flash('请把光标放在一个段落里')
+      return
+    }
+
+    const attrs = editor.getAttributes('paragraph') as Record<string, unknown>
+    const raw = typeof attrs.class === 'string' ? (attrs.class as string) : ''
+    const tokens = raw
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    const set = new Set(tokens)
+    for (const t of Array.from(set)) {
+      if (t.startsWith(PARAGRAPH_ALIGN_PREFIX)) set.delete(t)
+    }
+    if (align) set.add(`${PARAGRAPH_ALIGN_PREFIX}${align}`)
+
+    editor
+      .chain()
+      .focus()
+      .updateAttributes('paragraph', {
+        class: Array.from(set).join(' ') || null,
+        textAlign: null,
+      })
+      .run()
+  }
+
+  const disableFormatPainter = (msg = '已关闭格式刷') => {
+    formatPainterActiveRef.current = false
+    formatPainterPayloadRef.current = null
+    formatPainterArmedSelectionRef.current = ''
+    formatPainterLockedRef.current = false
+    setIsFormatPainterLocked(false)
+    setIsFormatPainterOn(false)
+    flash(msg)
+  }
+
+  const armFormatPainter = (locked: boolean) => {
+    if (!ensureEditor()) return
+
+    const paraTokens = getCurrentParagraphClassTokens()
+    const indent2 = paraTokens.includes(PARAGRAPH_INDENT_2_CLASS)
+    const align = getCurrentParagraphEffectiveAlign()
+    const c = (editor.getAttributes('textStyle')?.color as string | undefined) ?? ''
+    const color = normalizeColorToHex(c)
+
+    formatPainterPayloadRef.current = {
+      marks: {
+        bold: editor.isActive('bold'),
+        italic: editor.isActive('italic'),
+        underline: editor.isActive('underline'),
+        strike: editor.isActive('strike'),
+        color,
+      },
+      paragraph: {
+        indent2,
+        align,
+      },
+    }
+
+    formatPainterActiveRef.current = true
+    formatPainterLockedRef.current = locked
+    setIsFormatPainterLocked(locked)
+    formatPainterArmedSelectionRef.current = `${editor.state.selection.from}-${editor.state.selection.to}`
+    setIsFormatPainterOn(true)
+    flash(locked ? '格式刷已锁定：多次刷（Esc/再点关闭）' : '格式刷已开启：请选择目标文本/段落')
+  }
+
+  const toggleFormatPainterOnce = () => {
+    if (formatPainterActiveRef.current) {
+      disableFormatPainter('已关闭格式刷')
+      return
+    }
+    armFormatPainter(false)
+  }
+
+  const toggleFormatPainterLock = () => {
+    if (!ensureEditor()) return
+
+    if (formatPainterActiveRef.current && formatPainterLockedRef.current) {
+      disableFormatPainter('已关闭格式刷')
+      return
+    }
+
+    if (formatPainterActiveRef.current && !formatPainterLockedRef.current) {
+      formatPainterLockedRef.current = true
+      setIsFormatPainterLocked(true)
+      flash('格式刷已锁定：多次刷（Esc/再点关闭）')
+      return
+    }
+
+    armFormatPainter(true)
+  }
+
+  const toggleCurrentParagraphIndent2 = () => {
+    if (!ensureEditor()) return
+    if (!editor.isActive('paragraph')) {
+      flash('请把光标放在一个段落里')
+      return
+    }
+
+    const attrs = editor.getAttributes('paragraph') as Record<string, unknown>
+    const raw = typeof attrs.class === 'string' ? (attrs.class as string) : ''
+    const tokens = raw
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    const set = new Set(tokens)
+    const has = set.has(PARAGRAPH_INDENT_2_CLASS)
+    if (has) set.delete(PARAGRAPH_INDENT_2_CLASS)
+    else set.add(PARAGRAPH_INDENT_2_CLASS)
+
+    const next = Array.from(set).join(' ')
+    editor
+      .chain()
+      .focus()
+      .updateAttributes('paragraph', {
+        class: next || null,
+      })
+      .run()
+  }
+
+  const openEditorContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    const kind: 'rich' | 'markdown' = editorFormat === 'markdown' ? 'markdown' : 'rich'
+    setEditorContextMenu({ x: e.clientX, y: e.clientY, kind })
+  }
+
+  const tryExecCommand = async (command: 'cut' | 'copy' | 'paste' | 'selectAll' | 'undo' | 'redo') => {
+    try {
+      if (editorFormat === 'markdown') markdownScrollRef.current?.focus()
+      else editor?.chain().focus().run()
+
+      const ok = document.execCommand(command)
+      if (ok) return
+    } catch {
+      // ignore
+    }
+
+    if (command === 'paste') {
+      try {
+        const text = await navigator.clipboard.readText()
+        if (!text) return
+
+        if (editorFormat === 'markdown') {
+          const ta = markdownScrollRef.current
+          if (!ta) return
+          const start = ta.selectionStart ?? 0
+          const end = ta.selectionEnd ?? start
+          const next = `${markdownText.slice(0, start)}${text}${markdownText.slice(end)}`
+          handleMarkdownChange(next)
+          const caret = start + text.length
+          window.setTimeout(() => {
+            ta.focus()
+            ta.setSelectionRange(caret, caret)
+          }, 0)
+        } else if (editor) {
+          editor.chain().focus().insertContent(text).run()
+        }
+        return
+      } catch {
+        flash('粘贴失败：系统剪贴板权限受限')
+        return
+      }
+    }
+
+    if (command === 'copy') flash('复制失败')
+    if (command === 'cut') flash('剪切失败')
   }
 
   function handleSwitchToMarkdown() {
@@ -1165,6 +1697,39 @@ export default function WeChatEditor() {
   }
 
   const closeFsContextMenu = () => setFsContextMenu(null)
+  const closeEditorContextMenu = () => setEditorContextMenu(null)
+
+  useEffect(() => {
+    if (!editorContextMenu) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      closeEditorContextMenu()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [editorContextMenu])
+
+  useLayoutEffect(() => {
+    if (!editorContextMenu) return
+    const el = editorCtxMenuRef.current
+    if (!el) return
+
+    const pad = 8
+    const vw = window.innerWidth || 0
+    const vh = window.innerHeight || 0
+    const rect = el.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+
+    const maxX = Math.max(pad, vw - rect.width - pad)
+    const maxY = Math.max(pad, vh - rect.height - pad)
+    const nextX = Math.min(Math.max(pad, editorContextMenu.x), maxX)
+    const nextY = Math.min(Math.max(pad, editorContextMenu.y), maxY)
+
+    if (nextX !== editorContextMenu.x || nextY !== editorContextMenu.y) {
+      setEditorContextMenu({ ...editorContextMenu, x: nextX, y: nextY })
+    }
+  }, [editorContextMenu])
 
   useEffect(() => {
     if (!fsInlineAction) return
@@ -1866,6 +2431,7 @@ export default function WeChatEditor() {
       theme,
       customTheme: selectedCustomTheme,
       cssText: exportCss,
+      typography: inlineTypography,
     })
     const ok = await copyHtmlToClipboard({ html })
     flash(ok ? '已复制：公众号粘贴版（全量内联）' : '复制失败：可能被浏览器限制')
@@ -1887,9 +2453,17 @@ export default function WeChatEditor() {
   }
 
   function handleDownloadInlinedHtml() {
-    const full = buildWeChatHtmlDocument({
-      bodyHtml: exportInlinedArticleHtml,
+    const fixedTypography = { ...inlineTypography, paragraphSpacingMode: 'fixed' as const }
+    const bodyHtml = buildInlinedWeChatArticleHtml({
+      bodyHtml: previewHtml,
       theme,
+      customTheme: selectedCustomTheme,
+      typography: fixedTypography,
+    })
+    const full = buildWeChatHtmlDocument({
+      bodyHtml,
+      theme,
+      cssText: exportCss,
       title: '公众号文章（内联）',
     })
     downloadTextFile('wechat-article-inlined.html', full, 'text/html;charset=utf-8')
@@ -3055,6 +3629,20 @@ export default function WeChatEditor() {
                     role="menuitem"
                     onClick={() => {
                       closeMoreMenu()
+                      setIsTypographyOpen(true)
+                    }}
+                  >
+                    排版设置
+                  </button>
+
+                  <div className="menu__sep" />
+
+                  <button
+                    type="button"
+                    className="menu__item"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMoreMenu()
                       handleOpenImport()
                     }}
                   >
@@ -3782,28 +4370,28 @@ export default function WeChatEditor() {
             <div className="wechatToolbar">
             <ToolbarButton
               label="加粗"
-              active={!!editor?.isActive('bold')}
+              active={toolbarState.bold}
               onClick={() => editor?.chain().focus().toggleBold().run()}
             >
               B
             </ToolbarButton>
             <ToolbarButton
               label="斜体"
-              active={!!editor?.isActive('italic')}
+              active={toolbarState.italic}
               onClick={() => editor?.chain().focus().toggleItalic().run()}
             >
               I
             </ToolbarButton>
             <ToolbarButton
               label="下划线"
-              active={!!editor?.isActive('underline')}
+              active={toolbarState.underline}
               onClick={() => editor?.chain().focus().toggleUnderline().run()}
             >
               U
             </ToolbarButton>
             <ToolbarButton
               label="删除线"
-              active={!!editor?.isActive('strike')}
+              active={toolbarState.strike}
               onClick={() => editor?.chain().focus().toggleStrike().run()}
             >
               S
@@ -3852,21 +4440,21 @@ export default function WeChatEditor() {
 
             <ToolbarButton
               label="H1"
-              active={!!editor?.isActive('heading', { level: 1 })}
+              active={toolbarState.headingLevel === 1}
               onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
             >
               H1
             </ToolbarButton>
             <ToolbarButton
               label="H2"
-              active={!!editor?.isActive('heading', { level: 2 })}
+              active={toolbarState.headingLevel === 2}
               onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
             >
               H2
             </ToolbarButton>
             <ToolbarButton
               label="H3"
-              active={!!editor?.isActive('heading', { level: 3 })}
+              active={toolbarState.headingLevel === 3}
               onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
             >
               H3
@@ -3876,21 +4464,21 @@ export default function WeChatEditor() {
 
             <ToolbarButton
               label="无序列表"
-              active={!!editor?.isActive('bulletList')}
+              active={toolbarState.bulletList}
               onClick={() => editor?.chain().focus().toggleBulletList().run()}
             >
               • 列表
             </ToolbarButton>
             <ToolbarButton
               label="有序列表"
-              active={!!editor?.isActive('orderedList')}
+              active={toolbarState.orderedList}
               onClick={() => editor?.chain().focus().toggleOrderedList().run()}
             >
               1. 列表
             </ToolbarButton>
             <ToolbarButton
               label="引用"
-              active={!!editor?.isActive('blockquote')}
+              active={toolbarState.blockquote}
               onClick={() => editor?.chain().focus().toggleBlockquote().run()}
             >
               “引用”
@@ -3903,29 +4491,40 @@ export default function WeChatEditor() {
 
             <ToolbarButton
               label="左对齐"
-              active={!!editor?.isActive({ textAlign: 'left' })}
-              onClick={() => editor?.chain().focus().setTextAlign('left').run()}
+              active={toolbarState.inParagraph && toolbarState.paragraphAlign === 'left'}
+              disabled={!editor || !toolbarState.inParagraph}
+              onClick={() => setCurrentParagraphAlign('left')}
             >
               左
             </ToolbarButton>
             <ToolbarButton
               label="居中"
-              active={!!editor?.isActive({ textAlign: 'center' })}
-              onClick={() => editor?.chain().focus().setTextAlign('center').run()}
+              active={toolbarState.inParagraph && toolbarState.paragraphAlign === 'center'}
+              disabled={!editor || !toolbarState.inParagraph}
+              onClick={() => setCurrentParagraphAlign('center')}
             >
               中
             </ToolbarButton>
             <ToolbarButton
+              label="两端"
+              active={toolbarState.inParagraph && toolbarState.paragraphAlign === 'justify'}
+              disabled={!editor || !toolbarState.inParagraph}
+              onClick={() => setCurrentParagraphAlign('justify')}
+            >
+              端
+            </ToolbarButton>
+            <ToolbarButton
               label="右对齐"
-              active={!!editor?.isActive({ textAlign: 'right' })}
-              onClick={() => editor?.chain().focus().setTextAlign('right').run()}
+              active={toolbarState.inParagraph && toolbarState.paragraphAlign === 'right'}
+              disabled={!editor || !toolbarState.inParagraph}
+              onClick={() => setCurrentParagraphAlign('right')}
             >
               右
             </ToolbarButton>
 
             <div className="sep" />
 
-            <ToolbarButton label="链接" active={!!editor?.isActive('link')} onClick={handleSetLink}>
+            <ToolbarButton label="链接" active={toolbarState.link} onClick={handleSetLink}>
               链接
             </ToolbarButton>
             <ToolbarButton label="图片 URL" onClick={handleInsertImageByUrl}>
@@ -3972,6 +4571,15 @@ export default function WeChatEditor() {
               onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}
             >
               清格式
+            </ToolbarButton>
+
+            <ToolbarButton
+              label={isFormatPainterLocked ? '格式刷（锁定）' : '格式刷（单次；双击锁定）'}
+              active={isFormatPainterOn}
+              onClick={toggleFormatPainterOnce}
+              onDoubleClick={toggleFormatPainterLock}
+            >
+              刷
             </ToolbarButton>
             </div>
           )}
@@ -4020,7 +4628,12 @@ export default function WeChatEditor() {
           )}
 
           <div className="wechatPanelBody">
-            <div className="wechatEditorWrap" ref={editorScrollRef}>
+            <div
+              className="wechatEditorWrap"
+              ref={editorScrollRef}
+              style={editorTypographyVars}
+              onContextMenu={openEditorContextMenu}
+            >
               {editorFormat === 'markdown' ? (
                 <textarea
                   className="wechatMarkdownEditor"
@@ -4046,6 +4659,329 @@ export default function WeChatEditor() {
               )}
             </div>
           </div>
+
+          {editorContextMenu && (
+            <div className="wechatCtxMenu__backdrop" onMouseDown={() => closeEditorContextMenu()}>
+              <div
+                className="wechatCtxMenu"
+                ref={editorCtxMenuRef}
+                style={{ left: editorContextMenu.x, top: editorContextMenu.y }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {editorContextMenu.kind === 'rich' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        editor?.chain().focus().undo().run()
+                      }}
+                    >
+                      撤销（Ctrl+Z）
+                    </button>
+
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        editor?.chain().focus().redo().run()
+                      }}
+                    >
+                      重做（Ctrl+Y）
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      onClick={async () => {
+                        closeEditorContextMenu()
+                        await tryExecCommand('undo')
+                      }}
+                    >
+                      撤销
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      onClick={async () => {
+                        closeEditorContextMenu()
+                        await tryExecCommand('redo')
+                      }}
+                    >
+                      重做
+                    </button>
+                  </>
+                )}
+
+                <div className="wechatCtxMenu__sep" />
+
+                {editorContextMenu.kind === 'rich' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        editor?.chain().focus().toggleBold().run()
+                      }}
+                    >
+                      {editor?.isActive('bold') ? '✓ ' : ''}加粗
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        editor?.chain().focus().toggleItalic().run()
+                      }}
+                    >
+                      {editor?.isActive('italic') ? '✓ ' : ''}斜体
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        editor?.chain().focus().toggleUnderline().run()
+                      }}
+                    >
+                      {editor?.isActive('underline') ? '✓ ' : ''}下划线
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        handleSetLink()
+                      }}
+                    >
+                      {editor?.isActive('link') ? '✓ ' : ''}链接…
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        editor?.chain().focus().unsetAllMarks().clearNodes().run()
+                      }}
+                    >
+                      清格式
+                    </button>
+                    <div className="wechatCtxMenu__sep" />
+                  </>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="wechatCtxMenu__item"
+                  onClick={async () => {
+                    closeEditorContextMenu()
+                    await tryExecCommand('cut')
+                  }}
+                >
+                  剪切
+                </button>
+                <button
+                  type="button"
+                  className="wechatCtxMenu__item"
+                  onClick={async () => {
+                    closeEditorContextMenu()
+                    await tryExecCommand('copy')
+                  }}
+                >
+                  复制
+                </button>
+                <button
+                  type="button"
+                  className="wechatCtxMenu__item"
+                  onClick={async () => {
+                    closeEditorContextMenu()
+                    await tryExecCommand('paste')
+                  }}
+                >
+                  粘贴
+                </button>
+                <button
+                  type="button"
+                  className="wechatCtxMenu__item"
+                  onClick={async () => {
+                    closeEditorContextMenu()
+                    if (editorFormat === 'markdown') {
+                      const ta = markdownScrollRef.current
+                      if (ta) {
+                        ta.focus()
+                        ta.setSelectionRange(0, ta.value.length)
+                        return
+                      }
+                    }
+                    if (editor) {
+                      editor.chain().focus().selectAll().run()
+                      return
+                    }
+                    await tryExecCommand('selectAll')
+                  }}
+                >
+                  全选
+                </button>
+
+                <div className="wechatCtxMenu__sep" />
+
+                {editorContextMenu.kind === 'rich' ? (
+                  <button
+                    type="button"
+                    className="wechatCtxMenu__item"
+                    disabled={!editor}
+                    onClick={() => {
+                      const cls = ((editor?.getAttributes('paragraph')?.class as string | undefined) ?? '').trim()
+                      const has = cls.split(/\s+/).filter(Boolean).includes(PARAGRAPH_INDENT_2_CLASS)
+                      closeEditorContextMenu()
+                      toggleCurrentParagraphIndent2()
+                      flash(has ? '已取消：当前段落缩进' : '已应用：当前段落首行缩进')
+                    }}
+                  >
+                    {(() => {
+                      const cls = ((editor?.getAttributes('paragraph')?.class as string | undefined) ?? '').trim()
+                      const has = cls.split(/\s+/).filter(Boolean).includes(PARAGRAPH_INDENT_2_CLASS)
+                      return has ? '✓ ' : ''
+                    })()}
+                    首行缩进（当前段落 2em）
+                  </button>
+                ) : null}
+
+                {editorContextMenu.kind === 'rich' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor || !editor.isActive('paragraph')}
+                      onClick={() => {
+                        const explicit = getCurrentParagraphExplicitAlign()
+                        closeEditorContextMenu()
+                        setCurrentParagraphAlign(null)
+                        flash(explicit ? '已清除：当前段落对齐覆盖' : '当前段落已跟随排版')
+                      }}
+                    >
+                      {getCurrentParagraphExplicitAlign() ? '' : '✓ '}对齐：跟随排版
+                    </button>
+
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor || !editor.isActive('paragraph')}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setCurrentParagraphAlign('left')
+                        flash('已应用：当前段落左对齐')
+                      }}
+                    >
+                      {getCurrentParagraphEffectiveAlign() === 'left' ? '✓ ' : ''}对齐：左
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor || !editor.isActive('paragraph')}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setCurrentParagraphAlign('justify')
+                        flash('已应用：当前段落两端对齐')
+                      }}
+                    >
+                      {getCurrentParagraphEffectiveAlign() === 'justify' ? '✓ ' : ''}对齐：两端
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor || !editor.isActive('paragraph')}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setCurrentParagraphAlign('center')
+                        flash('已应用：当前段落居中')
+                      }}
+                    >
+                      {getCurrentParagraphEffectiveAlign() === 'center' ? '✓ ' : ''}对齐：居中
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      disabled={!editor || !editor.isActive('paragraph')}
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setCurrentParagraphAlign('right')
+                        flash('已应用：当前段落右对齐')
+                      }}
+                    >
+                      {getCurrentParagraphEffectiveAlign() === 'right' ? '✓ ' : ''}对齐：右
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setTypography((prev) => ({ ...prev, paragraphAlign: 'left' }))
+                      }}
+                    >
+                      {typography.paragraphAlign === 'left' ? '✓ ' : ''}对齐：左
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setTypography((prev) => ({ ...prev, paragraphAlign: 'justify' }))
+                      }}
+                    >
+                      {typography.paragraphAlign === 'justify' ? '✓ ' : ''}对齐：两端
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setTypography((prev) => ({ ...prev, paragraphAlign: 'center' }))
+                      }}
+                    >
+                      {typography.paragraphAlign === 'center' ? '✓ ' : ''}对齐：居中
+                    </button>
+                    <button
+                      type="button"
+                      className="wechatCtxMenu__item"
+                      onClick={() => {
+                        closeEditorContextMenu()
+                        setTypography((prev) => ({ ...prev, paragraphAlign: 'right' }))
+                      }}
+                    >
+                      {typography.paragraphAlign === 'right' ? '✓ ' : ''}对齐：右
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  className="wechatCtxMenu__item"
+                  onClick={() => {
+                    closeEditorContextMenu()
+                    setIsTypographyOpen(true)
+                  }}
+                >
+                  排版设置…
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="wechatHint">
             {editorFormat === 'markdown'
@@ -4123,6 +5059,13 @@ export default function WeChatEditor() {
         onConfirmImport={handleApplyThemeCssImport}
       />
 
+      <TypographyDialog
+        open={isTypographyOpen}
+        value={typography}
+        onChange={setTypography}
+        onClose={() => setIsTypographyOpen(false)}
+      />
+
       {isComponentConfigOpen && componentConfigTarget && getComponentSchema(componentConfigTarget) && (
         <ComponentInsertDialog
           open
@@ -4147,6 +5090,7 @@ function ToolbarButton(props: {
   active?: boolean
   disabled?: boolean
   onClick: () => void
+  onDoubleClick?: () => void
   children: React.ReactNode
 }) {
   return (
@@ -4154,6 +5098,7 @@ function ToolbarButton(props: {
       type="button"
       className={`tb ${props.active ? 'tb--active' : ''}`}
       onClick={props.onClick}
+      onDoubleClick={props.onDoubleClick}
       title={props.label}
       disabled={props.disabled}
     >

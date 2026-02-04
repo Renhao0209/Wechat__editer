@@ -11,13 +11,14 @@ function normalizeVarName(name: string): string {
   const trimmed = name.trim()
   if (trimmed.startsWith('--')) return trimmed
   if (trimmed.startsWith('wechat-')) return `--${trimmed}`
+  if (trimmed.startsWith('wce-')) return `--${trimmed}`
   return `--wechat-${trimmed}`
 }
 
 export function buildCustomThemeCss(theme: WeChatCustomTheme): string {
   const vars = Object.entries(theme.vars)
     .map(([k, v]) => [normalizeVarName(k), String(v).trim()] as const)
-    .filter(([k, v]) => k.startsWith('--wechat-') && v.length > 0)
+    .filter(([k, v]) => (k.startsWith('--wechat-') || k.startsWith('--wce-')) && v.length > 0)
     .map(([k, v]) => `  ${k}: ${v};`)
     .join('\n')
 
@@ -37,6 +38,9 @@ export function getWeChatBaseCss(): string {
 :root {
   --wechat-font-size: 15px;
   --wechat-line-height: 1.8;
+  --wechat-p-margin-y: 12px;
+  --wechat-text-indent: 0em;
+  --wechat-text-align: left;
   --wechat-text: #111;
   --wechat-muted: #666;
   --wechat-border: rgba(0, 0, 0, 0.12);
@@ -51,30 +55,73 @@ export function getWeChatBaseCss(): string {
 }
 
 .wechat-article {
-  /* Token aliases (v1): gradually migrate components to --wce-* */
+  /* Design tokens (v1): components should prefer --wce-* over --wechat-* */
   --wce-text: var(--wechat-text);
   --wce-muted: var(--wechat-muted);
-  --wce-border: var(--wechat-border);
-  --wce-bg: var(--wechat-bg);
-  --wce-accent: var(--wechat-accent);
-  --wce-accent-soft: var(--wechat-accent-soft);
-  --wce-accent-softer: var(--wechat-accent-softer);
   --wce-heading: var(--wechat-heading);
+
+  --wce-primary: var(--wechat-accent);
+  --wce-primary-soft: var(--wechat-accent-soft);
+  --wce-primary-softer: var(--wechat-accent-softer);
+
+  --wce-quote-border: var(--wechat-quote-border);
+  --wce-quote-bg: var(--wechat-quote-bg);
+
+  --wce-surface: var(--wechat-bg);
+  --wce-divider: var(--wechat-border);
+  --wce-border: var(--wechat-border);
+
   --wce-radius-sm: 8px;
   --wce-radius-md: 12px;
   --wce-radius-lg: 14px;
+
   --wce-shadow-1: 0 8px 18px rgba(0, 0, 0, 0.05);
   --wce-shadow-2: 0 10px 24px rgba(0, 0, 0, 0.08);
 
-  color: var(--wechat-text);
-  background: var(--wechat-bg);
-  font-size: var(--wechat-font-size);
-  line-height: var(--wechat-line-height);
+  /* Spacing scale (used by components; keep simple for WeChat) */
+  --wce-space-1: 6px;
+  --wce-space-2: 10px;
+  --wce-space-3: 14px;
+  --wce-space-4: 18px;
+
+  /* Typography tokens */
+  --wce-font-size-body: var(--wechat-font-size);
+  --wce-line-height-body: var(--wechat-line-height);
+  --wce-paragraph-spacing: var(--wechat-p-margin-y);
+  --wce-text-indent: var(--wechat-text-indent);
+  --wce-text-align: var(--wechat-text-align);
+
+  color: var(--wce-text);
+  background: var(--wce-surface);
+  font-size: var(--wce-font-size-body);
+  line-height: var(--wce-line-height-body);
   word-break: break-word;
 }
 
 .wechat-article p {
-  margin: 12px 0;
+  margin: var(--wce-paragraph-spacing) 0;
+  text-indent: var(--wce-text-indent);
+  text-align: var(--wce-text-align);
+}
+
+.wechat-article p.wce-p--indent2 {
+  text-indent: 2em;
+}
+
+.wechat-article p.wce-p--align-left {
+  text-align: left;
+}
+
+.wechat-article p.wce-p--align-justify {
+  text-align: justify;
+}
+
+.wechat-article p.wce-p--align-center {
+  text-align: center;
+}
+
+.wechat-article p.wce-p--align-right {
+  text-align: right;
 }
 
 .wechat-article h1,
@@ -83,7 +130,7 @@ export function getWeChatBaseCss(): string {
   margin: 18px 0 10px;
   line-height: 1.35;
   font-weight: 700;
-  color: var(--wechat-heading);
+  color: var(--wce-heading);
 }
 
 .wechat-article h1 {
@@ -92,7 +139,7 @@ export function getWeChatBaseCss(): string {
   letter-spacing: 0.5px;
   padding: 10px 10px 12px;
   border-radius: 14px;
-  background: linear-gradient(90deg, var(--wechat-accent-softer), transparent);
+  background: linear-gradient(90deg, var(--wce-primary-softer), transparent);
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
@@ -101,11 +148,11 @@ export function getWeChatBaseCss(): string {
 .wechat-article h3 {
   font-size: 16px;
   padding-left: 10px;
-  border-left: 3px solid var(--wechat-accent);
+  border-left: 3px solid var(--wce-primary);
 }
 
 .wechat-article a {
-  color: var(--wechat-accent);
+  color: var(--wce-primary);
   text-decoration: none;
 }
 
@@ -116,8 +163,8 @@ export function getWeChatBaseCss(): string {
 .wechat-article blockquote {
   margin: 14px 0;
   padding: 10px 12px;
-  border-left: 4px solid var(--wechat-quote-border);
-  background: var(--wechat-quote-bg);
+  border-left: 4px solid var(--wce-quote-border);
+  background: var(--wce-quote-bg);
 }
 
 /* Neutral wrapper for multi-block components (so they stay a single selectable unit). */
@@ -151,6 +198,7 @@ export function getWeChatBaseCss(): string {
   font-size: 16px;
   color: var(--wechat-muted);
   margin: 10px 0 14px;
+  text-indent: 0;
 }
 
 .wechat-article p.caption {
@@ -158,6 +206,7 @@ export function getWeChatBaseCss(): string {
   color: var(--wechat-muted);
   font-size: 13px;
   text-align: center;
+  text-indent: 0;
 }
 
 .wechat-article p.divider {
@@ -166,6 +215,7 @@ export function getWeChatBaseCss(): string {
   color: rgba(0, 0, 0, 0.38);
   letter-spacing: 3px;
   font-size: 14px;
+  text-indent: 0;
 }
 
 .wechat-article p.divider--flower {
@@ -447,9 +497,13 @@ export function buildWeChatHtmlDocument(params: {
   theme: WeChatThemeId
   customTheme?: WeChatCustomTheme
   title?: string
+  cssText?: string
 }): string {
   const title = params.title ?? 'WeChat Article'
-  const css = [getWeChatBaseCss(), getWeChatThemeCss(params.theme, params.customTheme)].join('\n\n')
+  const css =
+    typeof params.cssText === 'string' && params.cssText.trim().length > 0
+      ? params.cssText
+      : [getWeChatBaseCss(), getWeChatThemeCss(params.theme, params.customTheme)].join('\n\n')
 
   return `<!doctype html>
 <html lang="zh-CN">

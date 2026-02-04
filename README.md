@@ -95,6 +95,17 @@ git push origin v0.1.1
 3. 等待 Actions 工作流 `Release Desktop (Windows)` 完成
 4. 去 Releases 页面下载： https://github.com/Renhao0209/Wechat__editer/releases
 
+## 本地打包铁律（Windows）
+
+从现在开始，执行 `npm run dist:win` 视为“严格发布流程”，会自动完成以下步骤：
+
+1. 删除上次构建产物（`dist/`、`release/win-unpacked/`、旧的 `release/*.exe*` 等）
+2. 自动递增版本号（默认 `PATCH`，不创建 git tag）
+3. 从 [CHANGELOG.md](CHANGELOG.md) 的 `Unreleased` 生成当前版本条目，并写入 `release-notes/v<版本号>.md`
+4. 执行桌面版打包（`npm run build:desktop` → `electron-builder`）
+
+约定：每次你在对话里说“构建/打包”，我都会按这套流程跑完再返回结果。
+
 ## 推荐工作流（更贴近公众号后台）
 
 1. 写作 → 套模板/插组件 → 右侧预览确认
