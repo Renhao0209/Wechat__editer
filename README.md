@@ -99,6 +99,16 @@ git push origin v0.1.1
 3. 等待 Actions 工作流 `Release Desktop (Windows)` 完成
 4. 去 Releases 页面下载： https://github.com/Renhao0209/Wechat__editer/releases
 
+### 一键发布（推荐）
+
+不想每次手动改版本号 / 写 release-notes / 打 tag？直接跑：
+
+```bash
+npm run release:patch
+```
+
+它会自动执行：clean → bump 版本号 → 更新 CHANGELOG → 生成 release-notes → 打包 → commit → 打 tag → push（触发正式 Release 工作流）。
+
 ## 本地打包铁律（Windows）
 
 从现在开始，执行 `npm run dist:win` 视为“严格发布流程”，会自动完成以下步骤：

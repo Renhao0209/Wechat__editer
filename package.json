@@ -18,6 +18,10 @@
     "dist:win:publish": "cross-env WCE_PUBLISH=1 npm run dist:win",
     "dist:win:push": "node scripts/push-update-win.mjs",
     "dist:win:watch": "node scripts/watch-dist-win.mjs"
+    ,"release": "node scripts/release-tag.mjs"
+    ,"release:patch": "node scripts/release-tag.mjs --bump patch"
+    ,"release:minor": "node scripts/release-tag.mjs --bump minor"
+    ,"release:major": "node scripts/release-tag.mjs --bump major"
   },
   "dependencies": {
     "@tiptap/extension-character-count": "^3.17.1",
