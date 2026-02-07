@@ -84,6 +84,10 @@ npm run preview
 
 仓库已配置工作流：推送 Tag 后自动在 GitHub Release 上传 Windows 安装包。
 
+同时也提供“夜间构建”：推送到 `main` 会自动产出最新的 Windows 安装包，并更新到预发布 Release：
+
+- https://github.com/Renhao0209/Wechat__editer/releases/tag/nightly-win
+
 1. 更新版本号（`package.json`）与变更记录（[CHANGELOG.md](CHANGELOG.md)）
 2. 创建并推送 tag（遵循 SemVer）：
 

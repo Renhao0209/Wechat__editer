@@ -61,6 +61,37 @@ function setStyle(el: HTMLElement, style: Record<string, string | undefined>) {
   el.setAttribute('style', `${existing.trim().replace(/;$/, '')};${next}`)
 }
 
+function isVisuallyEmptyParagraph(p: HTMLElement): boolean {
+  if (p.tagName.toLowerCase() !== 'p') return false
+  const text = (p.textContent || '').replace(/\u00a0/g, ' ').trim()
+  if (text.length > 0) return false
+
+  // Common patterns after copy/paste or WeChat normalization.
+  const html = (p.innerHTML || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, '')
+    .toLowerCase()
+  if (html === '' || html === '<br>' || html === '<br/>' || html === '<br></br>') return true
+
+  // If it only contains <br> nodes (possibly wrapped), treat as empty.
+  const nodes = Array.from(p.childNodes)
+  return nodes.every((n) => {
+    if (n.nodeType === Node.TEXT_NODE) return (n.textContent || '').trim().length === 0
+    if (n.nodeType === Node.ELEMENT_NODE) {
+      const el = n as HTMLElement
+      const tag = el.tagName.toLowerCase()
+      if (tag === 'br') return true
+      // Allow empty spans that only contain <br>
+      if (tag === 'span') {
+        const inner = (el.innerHTML || '').replace(/\s+/g, '').toLowerCase()
+        return inner === '' || inner === '<br>' || inner === '<br/>' || inner === '<br></br>'
+      }
+      return false
+    }
+    return true
+  })
+}
+
 function themeVars(theme: WeChatThemeId, customTheme?: WeChatCustomTheme) {
   if (theme.startsWith('custom:') && customTheme) {
     const vars = customTheme.vars
@@ -155,7 +186,12 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
     }
 
     if (tag === 'p') {
-      const margin = typo.paragraphSpacingMode === 'wechat' ? '0' : `${typo.paragraphSpacingPx}px 0`
+      // In WeChat backend/editor, relying on its implicit blank lines is fragile.
+      // Keep a stable paragraph bottom spacing so published articles don't look “overlapped”.
+      const margin =
+        typo.paragraphSpacingMode === 'wechat'
+          ? `0 0 ${typo.paragraphSpacingPx}px 0`
+          : `${typo.paragraphSpacingPx}px 0`
       const style: Record<string, string | undefined> = { margin }
 
       if (!hasInlineStyleProp(el, 'text-indent')) {
@@ -177,6 +213,17 @@ export function buildInlinedWeChatArticleHtml(params: InlineParams): string {
       }
 
       setStyle(el, style)
+
+      // WeChat may insert/keep empty paragraphs around images/components.
+      // With our paragraph spacing, those empties can blow up into huge blank areas.
+      if (isVisuallyEmptyParagraph(el)) {
+        setStyle(el, {
+          margin: '0',
+          padding: '0',
+          'line-height': '0',
+          'font-size': '0',
+        })
+      }
 
       if (el.classList.contains('lead')) {
         setStyle(el, { 'font-size': '16px', color: 'rgba(0,0,0,0.62)', margin: '10px 0 14px' })
@@ -639,7 +686,10 @@ export function buildComputedInlinedWeChatArticleHtml(params: ComputedInlinePara
     inlineComputedStyles(root)
 
     // Paragraph spacing: either leave to WeChat editor (margin:0) or lock it.
-    const pMargin = typo.paragraphSpacingMode === 'wechat' ? '0' : `${typo.paragraphSpacingPx}px 0`
+    const pMargin =
+      typo.paragraphSpacingMode === 'wechat'
+        ? `0 0 ${typo.paragraphSpacingPx}px 0`
+        : `${typo.paragraphSpacingPx}px 0`
     for (const p of Array.from(root.querySelectorAll<HTMLElement>('p'))) {
       setStyle(p, { margin: pMargin })
 
@@ -659,6 +709,15 @@ export function buildComputedInlinedWeChatArticleHtml(params: ComputedInlinePara
                   : null
         setStyle(p, { 'text-align': align ?? typo.paragraphAlign })
       }
+
+      if (isVisuallyEmptyParagraph(p)) {
+        setStyle(p, {
+          margin: '0',
+          padding: '0',
+          'line-height': '0',
+          'font-size': '0',
+        })
+      }
     }
 
     // Defensive: prevent images from overlapping text in float-ish contexts.
@@ -670,7 +729,7 @@ export function buildComputedInlinedWeChatArticleHtml(params: ComputedInlinePara
     // A tiny non-empty spacer is more reliable than tweaking margins.
     setStyle(root, { overflow: 'visible', 'padding-top': '6px' })
     const spacer = document.createElement('p')
-    spacer.setAttribute('style', 'margin:0;line-height:12px;')
+    spacer.setAttribute('style', 'margin:0;padding:0;line-height:6px;font-size:0;')
     spacer.innerHTML = '<br>'
     root.insertBefore(spacer, root.firstChild)
 

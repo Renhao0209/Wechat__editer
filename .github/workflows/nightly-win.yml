@@ -1,0 +1,81 @@
+name: Nightly Desktop (Windows)
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'release-notes/**'
+      - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-win-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  win:
+    runs-on: windows-latest
+
+    env:
+      # Avoid CI failing due to missing code signing cert.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build web
+        run: npm run build
+
+      - name: Package (NSIS)
+        env:
+          # Prevent electron-builder from trying to auto-publish.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --publish never
+
+      - name: Remove uninstaller artifact (keep installer only)
+        shell: pwsh
+        run: |
+          if (Test-Path release) {
+            Get-ChildItem -Path release -Filter '*__uninstaller*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          }
+
+      - name: Upload workflow artifacts (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-windows-installer
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish to GitHub Release (nightly-win)
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: nightly-win
+          name: Nightly (Windows)
+          prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifactErrorsFailBuild: true
+          artifacts: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
