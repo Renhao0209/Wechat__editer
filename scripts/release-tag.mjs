@@ -37,7 +37,7 @@ function runCapture(cmd, args) {
 }
 
 function parseArgs(argv) {
-  const out = { bump: null, setVersion: null, noPush: false }
+  const out = { bump: null, setVersion: null, noPush: false, strictClean: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--bump' && i + 1 < argv.length) {
@@ -55,6 +55,10 @@ function parseArgs(argv) {
       out.noPush = true
       continue
     }
+    if (a === '--strict-clean') {
+      out.strictClean = true
+      continue
+    }
   }
   return out
 }
@@ -68,12 +72,23 @@ async function readPkgVersion() {
   return v
 }
 
-function ensureGitClean() {
+function ensureGitClean({ strict } = { strict: false }) {
   const s = runCapture('git', ['status', '--porcelain']).trim()
-  if (s.length > 0) {
+  if (s.length === 0) return
+
+  const lines = s
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+
+  const hasTrackedChanges = lines.some((l) => !l.startsWith('??'))
+  const hasUntracked = lines.some((l) => l.startsWith('??'))
+
+  if (strict ? (hasTrackedChanges || hasUntracked) : hasTrackedChanges) {
     throw new Error(
       [
-        'Working tree is not clean. Commit/stash your changes first, then rerun release.',
+        'Working tree is not clean. Commit/stash changes first, then rerun release.',
+        strict ? '(strict mode: untracked files also block release)' : '(note: untracked files are allowed)',
         '',
         s,
       ].join('\n'),
@@ -100,7 +115,7 @@ async function main() {
     throw new Error(`Invalid --bump value: ${args.bump} (expected patch/minor/major)`) 
   }
 
-  ensureGitClean()
+  ensureGitClean({ strict: args.strictClean })
 
   log('[release] Running strict release rule (clean + bump + changelog + notes + package)...')
   const strictArgs = []
