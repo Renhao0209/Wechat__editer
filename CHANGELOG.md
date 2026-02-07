@@ -6,15 +6,16 @@
 
 ### Added
 
-- 
+- Nightly Windows 安装包自动发布：推送到 `main` 自动打包并更新 `nightly-win` Release。
 
 ### Changed
 
-- 
+- Windows 发布工作流拆分：Tag 发布走正式 Release；旧的发布脚本保留为手动触发。
 
 ### Fixed
 
-- 
+- 公众号发布后正文“重叠/挤在一起”：内联导出不再依赖后台自动段落间距。
+- 公众号发布后图片/部分组件前后出现大量空白：压缩空段落（仅含 `<br>` / `&nbsp;`）的样式，避免空白被放大。
 
 ### Removed
 
