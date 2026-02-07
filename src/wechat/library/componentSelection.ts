@@ -1,3 +1,5 @@
+import type { EditorState } from '@tiptap/pm/state'
+
 import type { ComponentConfigSchema, ComponentItem } from './types'
 
 export type SelectedComponentInstance = {
@@ -19,8 +21,12 @@ export type ComponentSelectionDeps = {
   normalizeComponentValues: (c: ComponentItem, values: Record<string, string>) => Record<string, string>
 }
 
-export function probeSelectedComponent(editor: { state: any }, deps: ComponentSelectionDeps): SelectedComponentInstance | null {
+export function probeSelectedComponent(
+  editor: { state: EditorState } | null,
+  deps: ComponentSelectionDeps,
+): SelectedComponentInstance | null {
   try {
+    if (!editor) return null
     const state = editor.state
     const $from = state.selection.$from
 

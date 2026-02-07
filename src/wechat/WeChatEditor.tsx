@@ -773,7 +773,7 @@ export default function WeChatEditor() {
   }
 
   const probeSelectedComponent = (next: NonNullable<typeof editor>): SelectedComponentInstance | null => {
-    return probeSelectedComponentImpl(next as any, {
+    return probeSelectedComponentImpl(next, {
       components: COMPONENTS,
       getComponentSchema,
       getComponentRenderer,
@@ -1001,6 +1001,7 @@ export default function WeChatEditor() {
   useEffect(() => {
     if (!editor) return
     setToolbarState(deriveToolbarState(editor))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, typography])
 
   useEffect(() => {
@@ -1154,6 +1155,7 @@ export default function WeChatEditor() {
     if (editorFormat !== 'markdown') return
     if (isMarkdownTypingRef.current) return
     setMarkdownText(htmlToMarkdown(currentHtml))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentHtml, editorFormat])
 
   const exportCss = useMemo(() => {
@@ -1194,14 +1196,16 @@ export default function WeChatEditor() {
       : DEFAULT_TYPOGRAPHY.firstLineIndentEm
     const paragraphAlign = typography.paragraphAlign || DEFAULT_TYPOGRAPHY.paragraphAlign
 
-    return {
-      // Keep same variable names as export CSS so style stays consistent.
-      ['--wechat-font-size' as any]: `${fontSizePx}px`,
-      ['--wechat-line-height' as any]: String(lineHeight),
-      ['--wechat-p-margin-y' as any]: `${paragraphSpacingPx}px`,
-      ['--wechat-text-indent' as any]: `${firstLineIndentEm}em`,
-      ['--wechat-text-align' as any]: paragraphAlign,
-    } as React.CSSProperties
+    // Keep same variable names as export CSS so style stays consistent.
+    const vars = {
+      '--wechat-font-size': `${fontSizePx}px`,
+      '--wechat-line-height': String(lineHeight),
+      '--wechat-p-margin-y': `${paragraphSpacingPx}px`,
+      '--wechat-text-indent': `${firstLineIndentEm}em`,
+      '--wechat-text-align': paragraphAlign,
+    }
+
+    return vars as unknown as React.CSSProperties
   }, [typography])
 
   const exportFullHtml = useMemo(() => {
@@ -1768,6 +1772,7 @@ export default function WeChatEditor() {
     const content = getSavePayloadForRel(activeFile.rel)
     const nextSig = sigOf(content)
     setIsActiveFileDirty(activeFileSavedSig.length > 0 && nextSig !== activeFileSavedSig)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFile, activeFileSavedSig, currentHtml, editorFormat, fsRoot, markdownText])
 
   const openDiskFile = async (rel: string): Promise<void> => {
@@ -1906,7 +1911,7 @@ export default function WeChatEditor() {
     const content = getSavePayloadForRel(suggestedName)
     const res = await window.desktop.fs.saveAs({ root: fsRoot, suggestedName, content })
     if (!res.ok || !res.rel) {
-      if (res && (res as any).canceled) return
+      if (res.canceled) return
       flash(res.error ? `另存为失败：${res.error}` : '另存为失败')
       return
     }
@@ -2115,6 +2120,7 @@ export default function WeChatEditor() {
       if (fsSearchTokenRef.current !== token) return
       setFsSearchRunning(false)
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fsQuery, fsRoot])
 
   const newDraftId = (): string => {
@@ -2413,6 +2419,7 @@ export default function WeChatEditor() {
       document.removeEventListener('pointerdown', handlePointerDown, { capture: true })
       document.removeEventListener('keydown', handleKeyDown)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleCopyFullHtml() {
@@ -2735,7 +2742,7 @@ export default function WeChatEditor() {
         if (inst.end > nextText.length) continue
 
         const nextValues = normalizeComponentValues(c, { ...inst.values, ...stylePatch })
-        const rendered = renderer(nextValues) as any
+        const rendered = renderer(nextValues) as ReturnType<NonNullable<ComponentItem['render']>>
 
         if (COMPONENTS_PRESERVE_BODY.has(c.id) && c.id === 'royalFrameScroll') {
           const style = nextValues.style || 'royal'
@@ -2765,7 +2772,7 @@ export default function WeChatEditor() {
           continue
         }
 
-        if (!rendered || typeof rendered.html !== 'string') continue
+        if (!rendered || !('html' in rendered) || typeof rendered.html !== 'string') continue
         const html = rendered.html.replace(/<p><\/p>\s*$/i, '').trim()
         nextText = `${nextText.slice(0, inst.start)}${html}\n\n${nextText.slice(inst.end)}`
         applied += 1
@@ -2806,7 +2813,7 @@ export default function WeChatEditor() {
 
     let applied = 0
     for (const t of targets) {
-      const rendered = renderer(t.values) as any
+      const rendered = renderer(t.values) as ReturnType<NonNullable<ComponentItem['render']>>
 
       if (COMPONENTS_PRESERVE_BODY.has(c.id) && c.id === 'royalFrameScroll') {
         const state = editor.state
@@ -2835,24 +2842,24 @@ export default function WeChatEditor() {
         const textNode = state.schema.text(titleText, boldMarkType ? [boldMarkType.create()] : [])
 
         let kickerOffset: number | null = null
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let kickerChild: any = null
+        let kickerAttrs: Record<string, unknown> | null = null
+        let kickerNodeSize: number | null = null
         node.forEach((child: PMNode, offset: number) => {
           if (kickerOffset != null) return
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const anyChild = child as any
-          if (anyChild.type?.name !== 'paragraph') return
-          const cls = typeof (anyChild.attrs?.class) === 'string' ? (anyChild.attrs.class as string) : ''
+          if (child.type?.name !== 'paragraph') return
+          const attrs = (child.attrs ?? {}) as Record<string, unknown>
+          const cls = typeof attrs.class === 'string' ? (attrs.class as string) : ''
           if (!cls.includes('frame__kicker')) return
           kickerOffset = offset
-          kickerChild = child
+          kickerAttrs = attrs
+          kickerNodeSize = child.nodeSize
         })
 
-        if (kickerOffset != null && kickerChild) {
+        const pType = state.schema.nodes.paragraph
+        if (kickerOffset != null && kickerAttrs && typeof kickerNodeSize === 'number' && pType) {
           const childPos = from + 1 + kickerOffset
-          const pType = state.schema.nodes.paragraph
-          const newPara = pType.create((kickerChild as any).attrs, textNode)
-          tr.replaceWith(childPos, childPos + (kickerChild as any).nodeSize, newPara)
+          const newPara = pType.create(kickerAttrs as never, textNode)
+          tr.replaceWith(childPos, childPos + kickerNodeSize, newPara)
         }
 
         editor.view.dispatch(tr)
@@ -2860,7 +2867,8 @@ export default function WeChatEditor() {
         continue
       }
 
-      editor.chain().focus().insertContentAt({ from: t.from, to: t.to }, rendered.content ?? rendered.html).run()
+      const payload = 'content' in rendered ? rendered.content : rendered.html
+      editor.chain().focus().insertContentAt({ from: t.from, to: t.to }, payload).run()
       applied += 1
     }
 
@@ -3776,7 +3784,7 @@ export default function WeChatEditor() {
               onApplySelectedComponentProps={handleApplySelectedComponentProps}
               onResetSelectedComponentDefaults={handleResetSelectedComponentDefaults}
               onCopyStyleToSameComponents={handleCopyStyleToSameComponents}
-              probeSelectedComponent={(next) => probeSelectedComponent(next as any)}
+              probeSelectedComponent={(next) => probeSelectedComponent(next)}
             />
 
             <div
@@ -5016,7 +5024,7 @@ export default function WeChatEditor() {
                       }
 
                       const rawProps = el.getAttribute('data-wce-props') ?? ''
-                      const idx = rawProps ? markdownText.indexOf(`data-wce-props=\"${rawProps}\"`) : -1
+                      const idx = rawProps ? markdownText.indexOf(`data-wce-props="${rawProps}"`) : -1
                       if (idx >= 0) {
                         handleMarkdownCursorProbe(idx)
                       } else {

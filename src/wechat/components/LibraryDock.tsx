@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import type { Editor } from '@tiptap/core'
 import type { ComponentCategory, ComponentConfigSchema, ComponentItem, LayoutPreset } from '../library/types'
 import type { SelectedComponentInstance } from '../library/componentSelection'
 import { ComponentPropsPanel } from './ComponentPropsPanel'
@@ -37,7 +38,7 @@ type Props = {
   onSmartFormat: () => void
   onApplyLayoutReplace: (layoutId: string) => void
 
-  editor: unknown
+  editor: Editor | null
   selectedComponent: SelectedComponentInstance | null
   setSelectedComponent: (next: SelectedComponentInstance | null) => void
   componentPropsValues: Record<string, string>
@@ -48,7 +49,7 @@ type Props = {
   onResetSelectedComponentDefaults: () => void
   onCopyStyleToSameComponents: () => void
 
-  probeSelectedComponent: (editor: unknown) => SelectedComponentInstance | null
+  probeSelectedComponent: (editor: Editor) => SelectedComponentInstance | null
 }
 
 export function LibraryDock({

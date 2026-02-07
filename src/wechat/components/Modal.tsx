@@ -23,9 +23,6 @@ export function Modal({
   closeOnBackdrop = true,
   closeOnEsc = true,
 }: Props) {
-  if (!open) return null
-
-  // NOTE: Avoid closing on Esc if no handler is provided.
   useEffect(() => {
     if (!open) return
     if (!onClose) return
@@ -40,6 +37,8 @@ export function Modal({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open, onClose, closeOnEsc])
+
+  if (!open) return null
 
   return (
     <div
